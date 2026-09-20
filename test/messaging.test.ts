@@ -143,13 +143,18 @@ describe('send', () => {
 
     const { message } = (await res.json()) as { message: Message };
     expect(message.status).toBe('blocked');
-    expect(message.blockedReason).toBe('no_consent');
+    // Since step 4 the row says no channel was usable; which channel failed
+    // for what reason is in the event payload.
+    expect(message.blockedReason).toBe('no_channel');
 
     const events = await withTenant(
       TENANT_A,
-      (tx) => tx`select type from events where type = 'message.blocked'`,
+      (tx) => tx<{ payload: { channels: Record<string, string> } }[]>`
+        select payload from events where type = 'message.blocked'
+      `,
     );
     expect(events).toHaveLength(1);
+    expect(events[0]!.payload.channels['sms']).toBe('no_consent');
     expect(await sendJobCount()).toBe(0);
   });
 
@@ -255,7 +260,7 @@ describe('send', () => {
     });
     const { message } = (await res.json()) as { message: Message };
 
-    failFakeSends(new Error('provider exploded'));
+    failFakeSends('sms', new Error('provider exploded'));
 
     // Not the last attempt: it throws and leaves the row alone for the retry.
     await expect(processSend(message.id)).rejects.toThrow('provider exploded');
