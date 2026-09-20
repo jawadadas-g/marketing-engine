@@ -54,18 +54,17 @@ export function redactConfig(row: ChannelConfigRow) {
   };
 }
 
-/** Check the credentials against the provider before storing them. */
-export async function setChannelConfig(
-  tx: Tx,
-  input: {
-    tenantId: string;
-    channel: Channel;
-    provider: string;
-    sender: string;
-    unsubscribeText?: string | undefined;
-    config: ProviderConfig;
-  },
-): Promise<ChannelConfigRow> {
+/**
+ * Ask the provider whether these credentials work. Deliberately separate from
+ * storing them: this makes an HTTP call, and no database transaction should be
+ * held open across a round trip to someone else's API.
+ */
+export async function validateChannelConfig(input: {
+  channel: Channel;
+  provider: string;
+  sender: string;
+  config: ProviderConfig;
+}): Promise<void> {
   const adapter = adapterFor(input.provider);
   if (!adapter) {
     throw new MessagingError('unknown_provider', 422, `no adapter for provider ${input.provider}`);
@@ -80,7 +79,20 @@ export async function setChannelConfig(
 
   const check = await adapter.validateCredentials(input.config, input.sender);
   if (!check.ok) throw new MessagingError('credentials_rejected', 422, check.reason);
+}
 
+/** Store credentials that validateChannelConfig has already accepted. */
+export async function storeChannelConfig(
+  tx: Tx,
+  input: {
+    tenantId: string;
+    channel: Channel;
+    provider: string;
+    sender: string;
+    unsubscribeText?: string | undefined;
+    config: ProviderConfig;
+  },
+): Promise<ChannelConfigRow> {
   const sealed = encrypt(input.config);
 
   const [row] = await tx<ChannelConfigRow[]>`
@@ -100,7 +112,7 @@ export async function setChannelConfig(
       updated_at        = now()
     returning *
   `;
-  if (!row) throw new Error('setChannelConfig wrote no row');
+  if (!row) throw new Error('storeChannelConfig wrote no row');
 
   await emit(tx, {
     tenantId: input.tenantId,

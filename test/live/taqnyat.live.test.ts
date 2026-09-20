@@ -2,7 +2,11 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/api/app.js';
 import { db, withTenant } from '../../src/db/client.js';
 import { taqnyatAdapter } from '../../src/modules/messaging/adapters/taqnyat.js';
-import { setChannelConfig, upsertTemplate } from '../../src/modules/messaging/index.js';
+import {
+  storeChannelConfig,
+  upsertTemplate,
+  validateChannelConfig,
+} from '../../src/modules/messaging/index.js';
 import { processSend } from '../../src/modules/messaging/worker.js';
 import { TENANT_A, resetDb, startQueue, tokenFor } from '../helpers.js';
 
@@ -35,8 +39,14 @@ describe.runIf(configured)('taqnyat, live', () => {
   });
 
   it('sends one real SMS and records the provider id', async () => {
+    await validateChannelConfig({
+      channel: 'sms',
+      provider: 'taqnyat',
+      sender: sender!,
+      config,
+    });
     await withTenant(TENANT_A, (tx) =>
-      setChannelConfig(tx, {
+      storeChannelConfig(tx, {
         tenantId: TENANT_A,
         channel: 'sms',
         provider: 'taqnyat',

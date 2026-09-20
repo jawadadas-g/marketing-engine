@@ -5,8 +5,9 @@ import {
   getChannelConfig,
   redactConfig,
   send,
-  setChannelConfig,
+  storeChannelConfig,
   upsertTemplate,
+  validateChannelConfig,
   type MessageRow,
 } from '../../modules/messaging/index.js';
 import { CHANNELS, PURPOSES } from '../../spine/contacts/normalize.js';
@@ -46,8 +47,13 @@ messaging.put('/v1/channels/:channel', async (c) => {
   if (!parsed.success) return c.json({ error: 'invalid body', detail: parsed.error.issues }, 400);
 
   const tenantId = c.get('tenantId');
+
+  // Validate first: this talks to the provider over HTTP, and holding a
+  // transaction open across that round trip pins a connection for its latency.
+  await validateChannelConfig({ channel: ch.data, ...parsed.data });
+
   const row = await withTenant(tenantId, (tx) =>
-    setChannelConfig(tx, { tenantId, channel: ch.data, ...parsed.data }),
+    storeChannelConfig(tx, { tenantId, channel: ch.data, ...parsed.data }),
   );
   return c.json({ channel: redactConfig(row) });
 });
