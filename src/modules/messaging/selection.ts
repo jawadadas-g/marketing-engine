@@ -96,9 +96,12 @@ export async function selectChannel(
     });
 
     if (verdict.allowed) {
-      // Everything after the winner is the fallback order. Their verdicts are
-      // not cached: by the time a fallback runs, a quiet hour may have passed.
-      return { chosen: { channel, address }, fallback: ordered.slice(i + 1), reasons };
+      // The fallback order is what comes after the winner, minus anything the
+      // contact has not consented to: consent will not have changed by the time
+      // a fallback runs, but a quiet hour may well have passed, so a channel
+      // held back only by the window stays in.
+      const fallback = ordered.slice(i + 1).filter((c) => consented[c]);
+      return { chosen: { channel, address }, fallback, reasons };
     }
     reasons[channel] = verdict.reason === 'rule' ? `rule:${verdict.rule?.name}` : verdict.reason;
   }
@@ -118,6 +121,11 @@ async function orderFor(
   available: Channel[],
   consented: Record<string, boolean>,
 ): Promise<Channel[]> {
+  // A named channel is the channel, not a hint. Rules decide only when the
+  // caller did not. Without this the worker's fallback would ask the rules
+  // again and be sent straight back to the channel that just failed.
+  if (input.preferred) return available.filter((c) => c === input.preferred);
+
   const region = regionOf(input.contact, input.defaultCountry);
 
   const ruled = await decide<unknown>(tx, {

@@ -61,12 +61,17 @@ export type DecideResult<T> = { value: T | null; byRule?: RuleRef };
 
 /**
  * Like evaluate, but for rule kinds that answer with a value rather than a
- * verdict: the first rule producing something other than null wins. Scope
- * order is the same, so a tenant rule is consulted only when platform and
- * region rules declined to decide.
+ * verdict: the first rule producing something other than null wins.
+ *
+ * Scope order is the reverse of evaluate's — tenant, then region, then
+ * platform — because a value rule states a preference, not a restriction. A
+ * tenant choosing its own channel order takes nothing away: whatever order
+ * comes back, every channel in it still has to pass can_send in full. The
+ * platform row is a default, and the most specific rule should beat a default.
+ * Denial rules keep the opposite order, so a tenant can never lift one.
  */
 export async function decide<T>(tx: Tx, input: DecideInput): Promise<DecideResult<T>> {
-  const rules = await load(tx, input);
+  const rules = await load(tx, input, 'specific-first');
 
   for (const rule of rules) {
     let value: unknown;
@@ -84,7 +89,16 @@ export async function decide<T>(tx: Tx, input: DecideInput): Promise<DecideResul
   return { value: null };
 }
 
-function load(tx: Tx, input: EvaluateInput): Promise<RuleRow[]> {
+function load(
+  tx: Tx,
+  input: EvaluateInput,
+  order: 'broad-first' | 'specific-first' = 'broad-first',
+): Promise<RuleRow[]> {
+  const rank =
+    order === 'broad-first'
+      ? tx`case scope when 'platform' then 0 when 'region' then 1 else 2 end`
+      : tx`case scope when 'tenant' then 0 when 'region' then 1 else 2 end`;
+
   return tx<RuleRow[]>`
     select * from rules
     where kind = ${input.kind}
@@ -94,9 +108,7 @@ function load(tx: Tx, input: EvaluateInput): Promise<RuleRow[]> {
         or (scope = 'region' and region = ${input.region})
         or (scope = 'tenant' and tenant_id = ${input.tenantId})
       )
-    order by case scope when 'platform' then 0 when 'region' then 1 else 2 end,
-             created_at,
-             id
+    order by ${rank}, created_at, id
   `;
 }
 
