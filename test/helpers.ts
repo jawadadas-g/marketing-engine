@@ -20,7 +20,8 @@ export async function resetDb(): Promise<void> {
   await db()`
     truncate idempotency_keys, events, consent, suppression,
              messages, templates, tenant_channel_configs,
-             tenant_company, company_sources, company_identifiers, companies
+             tenant_company, company_sources, company_identifiers,
+             company_profiles, invites, finder_runs, companies
              restart identity cascade
   `;
   await clearSendJobs();

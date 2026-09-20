@@ -29,6 +29,8 @@ jobs:
       CREDENTIALS_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       WEBHOOK_TOKEN: test-webhook-token
       PUBLIC_BASE_URL: https://engine.test
+      INTERNAL_TOKEN: test-internal-token
+      MARKETPLACE_SIGNUP_URL: https://marketplace.test/signup
 
     steps:
       - uses: actions/checkout@v4

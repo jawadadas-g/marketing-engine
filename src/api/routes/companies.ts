@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { withTenant } from '../../db/client.js';
-import { CsvFormatError, readImport } from '../../spine/registry/csv.js';
+import { CsvFormatError, readImport, splitList } from '../../spine/registry/csv.js';
+import { setProfile } from '../../modules/discovery/index.js';
 import {
   IDENTIFIER_TYPES,
   findByIdentifier,
@@ -177,7 +178,7 @@ companies.post('/v1/companies/import', async (c) => {
             ...(row.relationship
               ? { relationship: row.relationship as 'customer' | 'supplier' | 'prospect' | 'other' }
               : {}),
-            ...(row.tags ? { tags: row.tags.split(';').map((t) => t.trim()).filter(Boolean) } : {}),
+            ...(row.tags ? { tags: splitList(row.tags) } : {}),
           },
         }),
       );
@@ -185,6 +186,21 @@ companies.post('/v1/companies/import', async (c) => {
       if (result.created) summary.created += 1;
       else summary.linked += 1;
       summary.merged += result.mergedFrom.length;
+
+      // The profile columns are optional; a file without them leaves profiles
+      // exactly as they were.
+      if (row.buys || row.sells || row.sector || row.city) {
+        await withTenant(tenantId, (tx) =>
+          setProfile(tx, {
+            tenantId,
+            companyId: result.company.id,
+            ...(row.buys ? { buys: splitList(row.buys) } : {}),
+            ...(row.sells ? { sells: splitList(row.sells) } : {}),
+            ...(row.sector ? { sector: row.sector } : {}),
+            ...(row.city ? { city: row.city } : {}),
+          }),
+        );
+      }
     } catch (err) {
       rejected.push({ row: lineNumber, reason: (err as Error).message });
     }

@@ -10,7 +10,7 @@ The rule is keep it simple. Every choice below is the smallest thing that works 
 
 What the marketplace gets from v1:
 
-- Suppliers find corporates who buy what they sell, and corporates find suppliers for an RFQ, including ones not on the platform yet.
+- Suppliers find corporate buyers who are not on the platform yet, and invite them in. Finding suppliers for an RFQ and matching among members are later scope.
 - One send call covers SMS, email, WhatsApp and Telegram, with consent and each region's sending rules enforced automatically.
 - Promocodes with rules, budgets and clear funding, reconciled against the ledger.
 
@@ -44,9 +44,7 @@ Four pieces, each a few tables and one function. Build only what the next module
 
 | Piece | Tables | The one function | Rule of thumb |
 | --- | --- | --- | --- |
-| Company registry | `companies` (canonical, shared), `company_identifiers` (CR, VAT, domain, phone, email), `company_sources` (where each fact came from), `tenant_company` (a tenant's own tags and notes) | `registry.upsert(company, identifiers, source)` | Exact match on CR, VAT or domain merges; otherwise create. Keep `merged_into` so merges can be undone. Tenant-specific views stay out of the canonical record. |
-
-The registry is a platform-owned pool of companies that are **not** on the marketplace: prospects that arrived through an import, an RFQ, an API call or a lookup. Marketplace members are not mirrored into it. `companies` and `company_identifiers` are therefore the one place the `tenant_id`-on-every-table rule does not apply: every tenant searches the same pool, so those two are readable by all and written only through `registry.upsert`. Everything a tenant says *about* a company — its relationship, tags and notes, and which sources it contributed — lives in `tenant_company` and `company_sources`, which are tenant-scoped like everything else.
+| Company registry | `companies` (platform-owned prospect pool of off-platform companies, shared), `company_identifiers` (CR, VAT, domain, phone, email), `company_sources` (where each fact came from), `tenant_company` (a tenant's own tags and notes) | `registry.upsert(company, identifiers, source)` | Strong identifiers (CR, VAT, domain) merge; weak ones (phone, email) link. Fuzzy name match links at 0.90 similarity, never merges. `merged_into` keeps merges legible. Marketplace members are not mirrored in. |
 | Consent and suppression | `consent` (contact, channel, purpose, source, timestamp), `suppression` (opt-outs, bounces, complaints, legal blocks) | `can_send(contact, channel, purpose, tenant)` | The only door out. Messaging calls it; nothing bypasses it. |
 | Event log | `events` (tenant_id, type, subject_type, subject_id, payload, occurred_at), append-only | `events.emit(...)` | Every module writes here. Analytics, client webhooks and audit all read from it. |
 | Rules | `rules` (scope: platform / region / tenant, kind, document JSON) | `rules.evaluate(kind, context)` | Platform and region rules run first; tenants add rules but cannot remove them. |
@@ -80,11 +78,11 @@ Adapters implement one interface: `send`, `parseWebhook`, `validateCredentials`.
 
 ### Discovery
 
-Ingest connectors (CSV import, RFQ listener, signup hook) all call the same `registry.upsert`. Company profiles hold what a company sells and buys (category codes), sector and city.
+Scope in v1: off-platform corporate buyers only. The registry holds a platform-owned prospect pool fed by imports, RFQ counterparties and lookups; marketplace members are not mirrored into it. A company that accepts an invite is marked as on-platform with the marketplace's reference, so the engine can recognise it later and stop suggesting it.
 
-Search is Postgres in v1: PGroonga for Arabic and English names, plain filters for sector, city and category. A `match_score` rule ranks results.
+The matching algorithm is not decided. Discovery is built as a `Finder` interface: `find(tenant, query) → ranked candidates`, with one trivial implementation (filter on profile fields, no ranking) so the endpoints work end to end. Every search is logged with its query and result count so the eventual algorithm can be evaluated against real asks. The real algorithm, when chosen, is a second implementation of the same interface and nothing else changes. No PGroonga and no `match_score` rule in v1; trigram search from `pg_trgm` covers free text.
 
-An invite is not a special thing. It is a message sent through the messaging module to a company with no account, carrying an invite token. On signup the token links the new account to the existing company record.
+An invite is not a special thing. It is a message sent through the messaging module to a company with no account, carrying an invite token. When the marketplace reports the signup with that token, the company record is linked to the new account.
 
 ### Promocodes
 
@@ -141,6 +139,7 @@ Each fits a seam that already exists:
 | New company source | One new ingest connector calling `registry.upsert` |
 | New behaviour | A new rule kind, same evaluator |
 | New country | Region-scoped rule rows |
+| The real discovery algorithm | A second `Finder` implementation, one registry line, `FINDER` env |
 | Better dedupe | Splink batch job proposing merges into the same registry |
 | Rule authoring UI | Swap json-logic for GoRules ZEN Engine, which ships an open-source rule editor; the JSON migrates |
 | Analytics or a data warehouse | Read the event log |
@@ -157,9 +156,9 @@ Eight steps, in order, each one brief and one pull request. Nothing starts until
 | 1. Skeleton | Hono service, Supabase connection, tenant JWT middleware, `tenant_id` on every table, RLS, pg-boss installed, `events` table and `events.emit` | A request with a tenant token writes one row and one event; a request with another tenant's token cannot read it |
 | 2. Consent | `consent`, `suppression`, `can_send`; platform and region sending rules as `json-logic` documents in `rules` | `can_send` says no for an unconsented number, a suppressed email and a promotional SMS outside allowed hours |
 | 3. Messaging, one channel | `send` intent API on raw contacts, LiquidJS rendering, pg-boss send job, one SMS adapter (Taqnyat), its webhook parsed into `sent`, `delivered`, `failed` events | One real SMS goes out through a tenant's own credentials and its delivery shows up in `events`. No company registry exists yet |
-| 4. Messaging, all channels ✅ done 2026-09-20 | WhatsApp, email (Nodemailer), Telegram adapters on the same interface; `channel_selection` rule; fallback by rule and retry | Send the same intent to four contacts with different consents and each lands on the right channel. Messaging is now usable standalone by any client |
-| 5. Registry ✅ done 2026-09-20 | `companies`, `company_identifiers`, `company_sources`, `tenant_company`; `registry.upsert` with exact match on CR, VAT, domain, then `pg_trgm` fuzzy on name; phone normalisation; Wathq as an optional `CompanyLookup` connector; contacts gain an optional `company_id` | Import the same company from a CSV, a signup and an RFQ and get one record with three sources |
-| 6. Discovery | Company profiles (sells, buys, sector, city); PGroonga index; search endpoints for suppliers and corporates; invite token and signup link-back | A supplier finds corporates by category and city; an off-platform supplier is invited, signs up and lands on the existing record |
+| 4. Messaging, all channels | WhatsApp, email (Nodemailer), Telegram adapters on the same interface; `channel_selection` rule; fallback by rule and retry | Send the same intent to four contacts with different consents and each lands on the right channel. Messaging is now usable standalone by any client |
+| 5. Registry (prospect pool) | `companies`, `company_identifiers`, `company_sources`, `tenant_company`; `registry.upsert` with exact match on CR, VAT, domain, then `pg_trgm` fuzzy on name; Wathq as an optional `CompanyLookup` connector; messages gain an optional `company_id`. Done 2026-09-20 | Import the same company from a CSV, an API call and an RFQ and get one record with three sources |
+| 6. Discovery skeleton | Company profiles (buys, sells, sector, city); `Finder` interface with the trivial `basic` implementation and a `finder_runs` log; search endpoint; invite token, `/i/:token` redirect, and the marketplace's accept callback. Done 2026-09-20 | A supplier searches the pool through the Finder interface; an off-platform buyer is invited, the marketplace reports the signup, and the record is marked on-platform and drops out of results |
 | 7. Promocodes | `promocodes`, `promo_funders`, `redemptions`; `validate`, `reserve`, `settle`, `release`; `Ledger` interface with the finance engine as first implementation; hold expiry job | A redeemed code produces one hold and one capture on the ledger; a cancelled order releases the hold; spend equals settlement |
 | 8. Client wiring | Outbound webhooks from `events`, idempotency keys on all writes, OpenTelemetry, a short API reference | The marketplace UI runs discovery, a send and a promo redemption end to end without touching the engine's database |
 
