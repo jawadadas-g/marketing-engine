@@ -5,6 +5,7 @@ import { decrypt, encrypt } from '../../spine/secrets.js';
 import { enqueue } from '../../jobs/index.js';
 import { adapterFor, type ProviderConfig } from './adapters/index.js';
 import { MessagingError } from './errors.js';
+import { findByIdentifier } from '../../spine/registry/index.js';
 import { addressFor, selectChannel, type ContactInput } from './selection.js';
 import { assertParses, render } from './templates.js';
 
@@ -45,6 +46,7 @@ export type MessageRow = {
   variables: Record<string, unknown>;
   fallback_channels: string[];
   parent_message_id: string | null;
+  company_id: string | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -312,6 +314,10 @@ export async function send(
     body = `${body}\n${unsubscribe}`;
   }
 
+  // Which company this went to, if the address is one we know. One indexed
+  // lookup on a unique key; a miss is normal and costs nothing.
+  const company = await companyForAddress(tx, channel, contact.address);
+
   const row = await insertMessage(tx, {
     ...input,
     channel,
@@ -320,6 +326,7 @@ export async function send(
     body,
     status: 'queued',
     fallbackChannels: fallback,
+    ...(company ? { companyId: company } : {}),
   });
 
   await emit(tx, {
@@ -366,6 +373,18 @@ export async function renderFor(
   return { body, subject: await render(template.subject, variables) };
 }
 
+/** A phone or email that is a company identifier says who we are writing to. */
+async function companyForAddress(
+  tx: Tx,
+  channel: Channel,
+  address: string,
+): Promise<string | undefined> {
+  const type = channel === 'email' ? 'email' : channel === 'telegram' ? null : 'phone';
+  if (!type) return undefined;
+  const company = await findByIdentifier(tx, type, address);
+  return company?.id;
+}
+
 async function insertMessage(
   tx: Tx,
   input: {
@@ -382,19 +401,21 @@ async function insertMessage(
     blockedReason?: string;
     fallbackChannels: Channel[];
     parentMessageId?: string | undefined;
+    companyId?: string | undefined;
   },
 ): Promise<MessageRow> {
   const [row] = await tx<MessageRow[]>`
     insert into messages
       (tenant_id, channel, address, region, purpose, template_name, body, status,
-       blocked_reason, contact, variables, fallback_channels, parent_message_id)
+       blocked_reason, contact, variables, fallback_channels, parent_message_id, company_id)
     values (${input.tenantId}, ${input.channel}, ${input.address}, ${input.region},
             ${input.purpose}, ${input.template}, ${input.body}, ${input.status},
             ${input.blockedReason ?? null},
             ${tx.json(input.contact as never)},
             ${tx.json((input.variables ?? {}) as never)},
             ${input.fallbackChannels},
-            ${input.parentMessageId ?? null})
+            ${input.parentMessageId ?? null},
+            ${input.companyId ?? null})
     returning *
   `;
   if (!row) throw new Error('send inserted no message row');

@@ -19,7 +19,9 @@ export async function resetDb(): Promise<void> {
   await db()`delete from rules where scope = 'tenant'`;
   await db()`
     truncate idempotency_keys, events, consent, suppression,
-             messages, templates, tenant_channel_configs restart identity
+             messages, templates, tenant_channel_configs,
+             tenant_company, company_sources, company_identifiers, companies
+             restart identity cascade
   `;
   await clearSendJobs();
   await db()`

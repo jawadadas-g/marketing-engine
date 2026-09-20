@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { auth, type AuthVars } from './middleware/auth.js';
 import { idempotency } from './middleware/idempotency.js';
+import { companies } from './routes/companies.js';
 import { consent } from './routes/consent.js';
 import { events } from './routes/events.js';
 import { health } from './routes/health.js';
@@ -35,6 +36,7 @@ export function createApp() {
   app.route('/', consent);
   app.route('/', rules);
   app.route('/', messaging);
+  app.route('/', companies);
 
   return app;
 }
