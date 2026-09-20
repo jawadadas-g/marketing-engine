@@ -10,4 +10,4 @@ if (!testUrl) {
   throw new Error('DATABASE_URL_TEST is not set — tests run against a real Postgres');
 }
 process.env.DATABASE_URL = testUrl;
-process.env.SUPABASE_JWT_SECRET ??= 'test-secret';
+process.env.JWT_SECRET ??= 'test-secret';

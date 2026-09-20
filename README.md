@@ -21,7 +21,7 @@ Then, the four commands:
 
 ```bash
 npm install                 # install dependencies
-cp .env.example .env        # then edit DATABASE_URL and SUPABASE_JWT_SECRET
+cp .env.example .env        # then edit DATABASE_URL and JWT_SECRET
 npm run migrate             # apply src/db/migrations in order
 npm run dev                 # start the service on $PORT (default 3000)
 ```
@@ -39,7 +39,7 @@ that database, so point it at a throwaway one.
 | `POST /v1/events` | Bearer JWT | append one event |
 | `GET /v1/events?type=&since=&limit=` | Bearer JWT | read this tenant's events |
 
-Auth is a Bearer JWT signed HS256 with `SUPABASE_JWT_SECRET` and carrying a
+Auth is a Bearer JWT signed HS256 with `JWT_SECRET` and carrying a
 `tenant_id` claim. Anything else is a 401.
 
 Writes accept an `Idempotency-Key` header. A repeat of the same key from the

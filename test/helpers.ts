@@ -21,7 +21,7 @@ export async function teardownDb(): Promise<void> {
 }
 
 export async function tokenFor(tenantId: string): Promise<string> {
-  const secret = new TextEncoder().encode(process.env.SUPABASE_JWT_SECRET!);
+  const secret = new TextEncoder().encode(process.env.JWT_SECRET!);
   return new SignJWT({ tenant_id: tenantId })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
