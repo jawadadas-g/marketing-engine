@@ -28,6 +28,7 @@ jobs:
       JWT_SECRET: test-secret
       CREDENTIALS_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       WEBHOOK_TOKEN: test-webhook-token
+      PUBLIC_BASE_URL: https://engine.test
 
     steps:
       - uses: actions/checkout@v4
