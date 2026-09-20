@@ -57,6 +57,10 @@ export const taqnyatAdapter: ChannelAdapter = {
 
     const text = await res.text();
     if (res.status !== 201) {
+      // Taqnyat reports a sender problem as `Number(s) is empty or incorrect`,
+      // which points at the wrong field. Verified live 2026-09-20: a sender
+      // that `/v1/messages/senders` lists as active can still be rejected for
+      // sending, and the 400 names the recipient. Check the sender first.
       throw new Error(`taqnyat: send failed with ${res.status}: ${text}`);
     }
 
