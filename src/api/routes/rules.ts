@@ -4,8 +4,7 @@ import { withTenant } from '../../db/client.js';
 import { createTenantRule, deleteTenantRule, listForTenant } from '../../spine/rules/index.js';
 import type { AuthVars } from '../middleware/auth.js';
 
-// One kind in v1. channel_selection arrives with step 4.
-const KINDS = ['sending_window'] as const;
+const KINDS = ['sending_window', 'channel_selection'] as const;
 
 const createBody = z.object({
   kind: z.enum(KINDS),

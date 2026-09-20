@@ -7,6 +7,7 @@ import { events } from './routes/events.js';
 import { health } from './routes/health.js';
 import { messaging } from './routes/messaging.js';
 import { rules } from './routes/rules.js';
+import { unsubscribe } from './routes/unsubscribe.js';
 import { webhooks } from './routes/webhooks.js';
 import { InvalidAddressError } from '../spine/contacts/normalize.js';
 import { MessagingError } from '../modules/messaging/errors.js';
@@ -26,6 +27,7 @@ export function createApp() {
 
   app.route('/', health);
   app.route('/', webhooks);
+  app.route('/', unsubscribe);
 
   app.use('/v1/*', auth);
   app.use('/v1/*', idempotency);

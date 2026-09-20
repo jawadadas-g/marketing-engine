@@ -36,19 +36,7 @@ export type EvaluateResult = { denied: boolean; byRule?: RuleRef };
  * documents are json-logic.
  */
 export async function evaluate(tx: Tx, input: EvaluateInput): Promise<EvaluateResult> {
-  const rules = await tx<RuleRow[]>`
-    select * from rules
-    where kind = ${input.kind}
-      and enabled
-      and (
-        scope = 'platform'
-        or (scope = 'region' and region = ${input.region})
-        or (scope = 'tenant' and tenant_id = ${input.tenantId})
-      )
-    order by case scope when 'platform' then 0 when 'region' then 1 else 2 end,
-             created_at,
-             id
-  `;
+  const rules = await load(tx, input);
 
   for (const rule of rules) {
     let denied: boolean;
@@ -66,6 +54,62 @@ export async function evaluate(tx: Tx, input: EvaluateInput): Promise<EvaluateRe
   }
 
   return { denied: false };
+}
+
+export type DecideInput = EvaluateInput;
+export type DecideResult<T> = { value: T | null; byRule?: RuleRef };
+
+/**
+ * Like evaluate, but for rule kinds that answer with a value rather than a
+ * verdict: the first rule producing something other than null wins.
+ *
+ * Scope order is the reverse of evaluate's — tenant, then region, then
+ * platform — because a value rule states a preference, not a restriction. A
+ * tenant choosing its own channel order takes nothing away: whatever order
+ * comes back, every channel in it still has to pass can_send in full. The
+ * platform row is a default, and the most specific rule should beat a default.
+ * Denial rules keep the opposite order, so a tenant can never lift one.
+ */
+export async function decide<T>(tx: Tx, input: DecideInput): Promise<DecideResult<T>> {
+  const rules = await load(tx, input, 'specific-first');
+
+  for (const rule of rules) {
+    let value: unknown;
+    try {
+      value = jsonLogic.apply(rule.document as never, input.context);
+    } catch (err) {
+      console.error(`rules: ${input.kind} rule ${rule.id} (${rule.name}) threw, skipping`, err);
+      continue;
+    }
+    if (value !== null && value !== undefined) {
+      return { value: value as T, byRule: { id: rule.id, name: rule.name, scope: rule.scope } };
+    }
+  }
+
+  return { value: null };
+}
+
+function load(
+  tx: Tx,
+  input: EvaluateInput,
+  order: 'broad-first' | 'specific-first' = 'broad-first',
+): Promise<RuleRow[]> {
+  const rank =
+    order === 'broad-first'
+      ? tx`case scope when 'platform' then 0 when 'region' then 1 else 2 end`
+      : tx`case scope when 'tenant' then 0 when 'region' then 1 else 2 end`;
+
+  return tx<RuleRow[]>`
+    select * from rules
+    where kind = ${input.kind}
+      and enabled
+      and (
+        scope = 'platform'
+        or (scope = 'region' and region = ${input.region})
+        or (scope = 'tenant' and tenant_id = ${input.tenantId})
+      )
+    order by ${rank}, created_at, id
+  `;
 }
 
 /** Rules this tenant may see: platform, region and its own. */

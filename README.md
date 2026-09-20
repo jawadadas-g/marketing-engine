@@ -49,7 +49,9 @@ never part of `npm test` or CI.
 | `PUT /v1/templates/:name` | Bearer JWT | create or replace a Liquid template |
 | `POST /v1/messages` | Bearer JWT | send intent: 202 when queued, 200 when `can_send` refused |
 | `GET /v1/messages/:id` | Bearer JWT | one message and its status |
-| `POST /webhooks/:provider/:token` | token in the URL | provider delivery reports |
+| `POST /webhooks/:provider/:token` | token in the URL | provider callbacks |
+| `GET /webhooks/whatsapp-meta/:token` | token in the URL | Meta's subscription handshake |
+| `POST`/`GET /unsubscribe/:token` | signed token | one-click opt-out from an email |
 
 Auth is a Bearer JWT signed HS256 with `JWT_SECRET` and carrying a
 `tenant_id` claim. Anything else is a 401.
@@ -91,18 +93,62 @@ have no region, so only platform and tenant rules apply to them. Pass
 ## Sending a message
 
 `POST /v1/messages` takes an intent, not a channel command: who, which template,
-which purpose. The engine normalises the address, loads the tenant's provider
-config and template, asks `can_send`, and only then renders and queues. A
-refusal is not an error — it is a `messages` row with `status: 'blocked'` and
-the reason, returned with 200, and nothing reaches the queue. A `queued` message
-comes back 202; the pg-boss worker sends it with the tenant's own credentials
-and writes `sent`, and the provider's delivery report moves it to `delivered` or
-`failed`. Every one of those transitions appends to `events`.
+which purpose. A contact carries one address per channel, and a phone serves
+both SMS and WhatsApp:
 
-Marketing messages must have `unsubscribeText` on the channel config; it is
-appended to the rendered body on its own line, and a send without it is a 422.
+```json
+{
+  "contact": { "phone": "+9665...", "email": "a@b.co", "telegram": "123456789" },
+  "purpose": "marketing",
+  "template": "order_update",
+  "variables": { "order": "A-1043" },
+  "defaultCountry": "SA"
+}
+```
+
+Name a `channel` and that is the channel. Leave it out and the engine picks:
+it asks suppression and consent of every channel the contact has both an
+address and a configured provider for, lets a `channel_selection` rule order
+what is left, and applies the sending window to the one it picks. Channels
+after the winner become its fallback order. A tenant's own selection rule beats
+the platform default, because an order is a preference — whatever comes back,
+every channel in it still has to pass `can_send`.
+
+Nothing usable is not an error: it is a `messages` row with
+`status: 'blocked'`, `blocked_reason: 'no_channel'` and a `message.blocked`
+event naming each channel's reason, returned with 200. A `queued` message comes
+back 202; the pg-boss worker sends it with the tenant's own credentials and
+writes `sent`, and provider callbacks move it to `delivered`, `read` or
+`failed`. When a send fails for good and a fallback remains, the worker re-runs
+the same intent on the next channel as a child message and emits
+`message.fallback`. Every transition appends to `events`.
+
+Marketing messages on SMS, WhatsApp and Telegram need `unsubscribeText` on the
+channel config; it is appended to the body on its own line, and a send without
+it is a 422. Email carries its opt-out in the `List-Unsubscribe` header instead.
 Templates are Liquid, rendered with `strictVariables`, so a missing variable is a
-400 naming it rather than an empty string sent to a real phone.
+400 naming it rather than an empty string sent to a real person.
+
+### The four providers
+
+| Provider | Channel | `config` keys |
+| --- | --- | --- |
+| `taqnyat` | `sms` | `token`, `baseUrl?` |
+| `whatsapp-meta` | `whatsapp` | `accessToken`, `phoneNumberId`, `appSecret`, `apiVersion?` |
+| `email-smtp` | `email` | `host`, `port`, `secure`, `user`, `pass`, `fromName?` |
+| `telegram` | `telegram` | `botToken` |
+| `fake` | all four | `token` (`"bad"` fails validation) |
+
+An email template needs a `subject`; a WhatsApp template needs a `providerRef`
+naming the Meta-approved template and the order its positional parameters are
+filled, because Meta does not accept free text for business-initiated messages:
+
+```json
+{ "channel": "whatsapp", "body": "Hi {{ name }}",
+  "providerRef": { "name": "greet", "language": "ar", "params": ["name"] } }
+```
+
+A template missing the piece its channel needs is `template_unfit`.
 
 Provider credentials are AES-256-GCM encrypted before they touch the database,
 with a key the database never sees. Generate one with:
@@ -116,18 +162,48 @@ and never the credentials themselves.
 
 ## Provider webhooks
 
-Delivery reports arrive at:
+Callbacks arrive at one URL shape, which you register with each provider:
 
 ```
-POST https://<host>/webhooks/<provider>/<WEBHOOK_TOKEN>
+POST https://<PUBLIC_BASE_URL>/webhooks/<provider>/<WEBHOOK_TOKEN>
 ```
 
-There is no JWT — a provider has none — and SMS providers generally cannot sign
-their callbacks, so the URL itself is the secret. A wrong token gets the same
-404 as an unknown path. Set `WEBHOOK_TOKEN` to something long and random, and
-treat the whole URL as a credential. A body the adapter cannot match is logged
-and answered 202: replying 4xx to a provider makes it retry the same body
-forever.
+There is no JWT — a provider has none — so the URL itself is the secret. A wrong
+token gets the same 404 as an unknown path. Set `WEBHOOK_TOKEN` to something
+long and random and treat the whole URL as a credential. A body an adapter
+cannot make sense of is logged and answered 202: replying 4xx makes a provider
+retry the same body forever.
+
+- **Taqnyat** — set the delivery-report URL in the dashboard. The callback shape
+  is not in their OpenAPI spec, so the parser is permissive and carries a TODO.
+- **WhatsApp (Meta)** — register the same URL as the webhook callback with
+  `WEBHOOK_TOKEN` as the verify token. Meta GETs it once and expects the
+  challenge echoed, which `GET /webhooks/whatsapp-meta/:token` does. Meta signs
+  every payload, so the tenant is resolved from `phone_number_id` and the body
+  is checked against that tenant's `appSecret`. A bad signature is the one case
+  a provider gets a 401 from us: it is not a malformed body, it is someone who
+  should not be posting here.
+- **Telegram** — register with the secret header:
+  ```bash
+  curl "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+    -d "url=https://<PUBLIC_BASE_URL>/webhooks/telegram/<WEBHOOK_TOKEN>" \
+    -d "secret_token=<WEBHOOK_TOKEN>"
+  ```
+  Telegram has no delivery reports; the callback carries inbound replies only.
+- **SMTP** — no callbacks at all. A sent email stays `sent`.
+
+Inbound replies become `message.replied` events with the text. Acting on a STOP
+reply is a rule for a later step; nothing is automatic yet.
+
+## Unsubscribe
+
+Marketing email carries `List-Unsubscribe` and `List-Unsubscribe-Post`, which is
+what Gmail and Yahoo require on bulk mail and the difference between an opt-out
+and a spam complaint. The link is
+`<PUBLIC_BASE_URL>/unsubscribe/<token>`, where the token is an HMAC over the
+tenant, channel and address signed with `WEBHOOK_TOKEN` — so there is no table
+behind it and a tampered link is a 404. Following it writes both a suppression
+and a revoked consent, so `can_send` says `suppressed` from then on.
 
 ## Tenant isolation
 

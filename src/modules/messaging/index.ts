@@ -1,12 +1,15 @@
 import type { Tx } from '../../db/client.js';
-import { canSend } from '../../spine/consent/index.js';
 import { normalize, type Channel, type Purpose } from '../../spine/contacts/normalize.js';
 import { emit } from '../../spine/events/index.js';
 import { decrypt, encrypt } from '../../spine/secrets.js';
 import { enqueue } from '../../jobs/index.js';
 import { adapterFor, type ProviderConfig } from './adapters/index.js';
 import { MessagingError } from './errors.js';
+import { addressFor, selectChannel, type ContactInput } from './selection.js';
 import { assertParses, render } from './templates.js';
+
+export type { ContactInput } from './selection.js';
+export { addressFor } from './selection.js';
 
 export const SEND_JOB = 'message.send';
 
@@ -35,9 +38,13 @@ export type MessageRow = {
   body: string;
   provider: string | null;
   provider_message_id: string | null;
-  status: 'blocked' | 'queued' | 'sent' | 'delivered' | 'failed';
+  status: 'blocked' | 'queued' | 'sent' | 'delivered' | 'read' | 'failed';
   blocked_reason: string | null;
   error: string | null;
+  contact: ContactInput;
+  variables: Record<string, unknown>;
+  fallback_channels: string[];
+  parent_message_id: string | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -54,8 +61,27 @@ export function redactConfig(row: ChannelConfigRow) {
   };
 }
 
-/** Check the credentials against the provider before storing them. */
-export async function setChannelConfig(
+/**
+ * Ask the provider whether these credentials work. Deliberately separate from
+ * storing them: this makes an HTTP call, and no database transaction should be
+ * held open across a round trip to someone else's API.
+ */
+export async function validateChannelConfig(input: {
+  channel: Channel;
+  provider: string;
+  sender: string;
+  config: ProviderConfig;
+}): Promise<void> {
+  const adapter = adapterFor(input.provider, input.channel);
+  if (!adapter) {
+    throw new MessagingError('unknown_provider', 422, `no adapter for provider ${input.provider}`);
+  }
+  const check = await adapter.validateCredentials(input.config, input.sender);
+  if (!check.ok) throw new MessagingError('credentials_rejected', 422, check.reason);
+}
+
+/** Store credentials that validateChannelConfig has already accepted. */
+export async function storeChannelConfig(
   tx: Tx,
   input: {
     tenantId: string;
@@ -66,21 +92,6 @@ export async function setChannelConfig(
     config: ProviderConfig;
   },
 ): Promise<ChannelConfigRow> {
-  const adapter = adapterFor(input.provider);
-  if (!adapter) {
-    throw new MessagingError('unknown_provider', 422, `no adapter for provider ${input.provider}`);
-  }
-  if (adapter.channel !== input.channel) {
-    throw new MessagingError(
-      'unknown_provider',
-      422,
-      `provider ${input.provider} does not serve channel ${input.channel}`,
-    );
-  }
-
-  const check = await adapter.validateCredentials(input.config, input.sender);
-  if (!check.ok) throw new MessagingError('credentials_rejected', 422, check.reason);
-
   const sealed = encrypt(input.config);
 
   const [row] = await tx<ChannelConfigRow[]>`
@@ -100,7 +111,7 @@ export async function setChannelConfig(
       updated_at        = now()
     returning *
   `;
-  if (!row) throw new Error('setChannelConfig wrote no row');
+  if (!row) throw new Error('storeChannelConfig wrote no row');
 
   await emit(tx, {
     tenantId: input.tenantId,
@@ -115,12 +126,24 @@ export async function setChannelConfig(
 
 export async function getChannelConfig(
   tx: Tx,
+  tenantId: string,
   channel: string,
 ): Promise<ChannelConfigRow | undefined> {
   const [row] = await tx<ChannelConfigRow[]>`
-    select * from tenant_channel_configs where channel = ${channel}
+    select * from tenant_channel_configs
+    where tenant_id = ${tenantId} and channel = ${channel}
   `;
   return row;
+}
+
+export async function listChannelConfigs(
+  tx: Tx,
+  tenantId: string,
+): Promise<Map<Channel, ChannelConfigRow>> {
+  const rows = await tx<ChannelConfigRow[]>`
+    select * from tenant_channel_configs where tenant_id = ${tenantId}
+  `;
+  return new Map(rows.map((r) => [r.channel as Channel, r]));
 }
 
 export type TemplateRow = {
@@ -129,21 +152,37 @@ export type TemplateRow = {
   name: string;
   channel: string;
   body: string;
+  subject: string | null;
+  provider_ref: Record<string, unknown> | null;
   created_at: Date;
   updated_at: Date;
 };
 
 export async function upsertTemplate(
   tx: Tx,
-  input: { tenantId: string; name: string; channel: Channel; body: string },
+  input: {
+    tenantId: string;
+    name: string;
+    channel: Channel;
+    body: string;
+    subject?: string | undefined;
+    providerRef?: Record<string, unknown> | undefined;
+  },
 ): Promise<TemplateRow> {
   assertParses(input.body);
 
+  if (input.subject) assertParses(input.subject);
+
   const [row] = await tx<TemplateRow[]>`
-    insert into templates (tenant_id, name, channel, body)
-    values (${input.tenantId}, ${input.name}, ${input.channel}, ${input.body})
+    insert into templates (tenant_id, name, channel, body, subject, provider_ref)
+    values (${input.tenantId}, ${input.name}, ${input.channel}, ${input.body},
+            ${input.subject ?? null},
+            ${input.providerRef ? tx.json(input.providerRef as never) : null})
     on conflict (tenant_id, name, channel) do update set
-      body = excluded.body, updated_at = now()
+      body         = excluded.body,
+      subject      = excluded.subject,
+      provider_ref = excluded.provider_ref,
+      updated_at   = now()
     returning *
   `;
   if (!row) throw new Error('upsertTemplate wrote no row');
@@ -160,83 +199,114 @@ export async function upsertTemplate(
 }
 
 /**
- * The send intent. Runs can_send, renders, queues. Never talks to a provider:
- * that is the worker's job, after this has committed.
+ * The send intent. Picks a channel, runs can_send, renders, queues. Never talks
+ * to a provider: that is the worker's job, after this has committed.
+ *
+ * Every query scopes by tenant explicitly rather than leaning on RLS, because
+ * this also runs from the send worker's fallback path.
  */
 export async function send(
   tx: Tx,
   input: {
     tenantId: string;
-    channel: Channel;
-    address: string;
+    contact: ContactInput;
+    /** Omit to let the rules pick. */
+    channel?: Channel | undefined;
     purpose: Purpose;
     template: string;
     variables?: Record<string, unknown> | undefined;
     defaultCountry?: string | undefined;
     at?: Date | undefined;
+    parentMessageId?: string | undefined;
+    /** Set by the fallback path; otherwise selection works it out. */
+    fallbackChannels?: Channel[] | undefined;
   },
 ): Promise<MessageRow> {
-  const contact = normalize(input);
+  const configs = await listChannelConfigs(tx, input.tenantId);
 
-  const config = await getChannelConfig(tx, input.channel);
-  if (!config) {
-    throw new MessagingError(
-      'channel_not_configured',
-      409,
-      `no provider configured for channel ${input.channel}`,
-    );
+  if (input.channel) {
+    if (!addressFor(input.contact, input.channel)) {
+      throw new MessagingError(
+        'address_missing',
+        400,
+        `the contact has no address for channel ${input.channel}`,
+      );
+    }
+    if (!configs.has(input.channel)) {
+      throw new MessagingError(
+        'channel_not_configured',
+        409,
+        `no provider configured for channel ${input.channel}`,
+      );
+    }
   }
 
-  const [template] = await tx<TemplateRow[]>`
-    select * from templates
-    where name = ${input.template} and channel = ${input.channel}
-  `;
-  if (!template) {
-    throw new MessagingError('template_not_found', 404, `no template named ${input.template}`);
-  }
-
-  // can_send is the only door out, and it runs before anything is rendered.
-  const verdict = await canSend(tx, {
+  const selection = await selectChannel(tx, {
     tenantId: input.tenantId,
-    channel: input.channel,
-    address: input.address,
+    contact: input.contact,
     purpose: input.purpose,
+    configuredChannels: new Set(configs.keys()),
+    ...(input.channel ? { preferred: input.channel } : {}),
     ...(input.at ? { at: input.at } : {}),
     ...(input.defaultCountry ? { defaultCountry: input.defaultCountry } : {}),
   });
 
-  if (!verdict.allowed) {
-    const reason = verdict.reason === 'rule' ? `rule:${verdict.rule?.name}` : verdict.reason;
+  if (!selection.chosen) {
     const row = await insertMessage(tx, {
       ...input,
-      contactAddress: contact.address,
-      region: contact.region,
+      channel: input.channel ?? 'sms',
+      address: input.channel ? (addressFor(input.contact, input.channel) ?? '') : '',
+      region: null,
       body: '',
       status: 'blocked',
-      blockedReason: reason,
+      blockedReason: 'no_channel',
+      fallbackChannels: [],
     });
     await emit(tx, {
       tenantId: input.tenantId,
       type: 'message.blocked',
       subjectType: 'message',
       subjectId: row.id,
-      payload: { reason, channel: input.channel, purpose: input.purpose },
+      payload: { reason: 'no_channel', purpose: input.purpose, channels: selection.reasons },
     });
     return row;
   }
 
-  let body = await render(template.body, {
+  const { channel, address } = selection.chosen;
+  const config = configs.get(channel)!;
+  const contact = normalize({
+    channel,
+    address,
+    ...(input.defaultCountry ? { defaultCountry: input.defaultCountry } : {}),
+  });
+
+  const [template] = await tx<TemplateRow[]>`
+    select * from templates
+    where tenant_id = ${input.tenantId} and name = ${input.template} and channel = ${channel}
+  `;
+  if (!template) {
+    throw new MessagingError(
+      'template_not_found',
+      404,
+      `no template named ${input.template} for channel ${channel}`,
+    );
+  }
+
+  const fallback = input.fallbackChannels ?? selection.fallback;
+  const rendered = await renderFor(channel, template, {
     ...(input.variables ?? {}),
     contact: { address: contact.address },
   });
 
-  if (input.purpose === 'marketing') {
+  let body = rendered.body;
+  if (input.purpose === 'marketing' && channel !== 'email') {
+    // Email carries its opt-out in the List-Unsubscribe header instead.
     const unsubscribe = config.unsubscribe_text?.trim();
     if (!unsubscribe) {
       throw new MessagingError(
         'unsubscribe_text_required',
         422,
-        `channel ${input.channel} has no unsubscribe_text, which marketing messages require`,
+        `channel ${channel} has no unsubscribe_text, which marketing messages require`,
       );
     }
     body = `${body}\n${unsubscribe}`;
@@ -244,10 +314,12 @@ export async function send(
 
   const row = await insertMessage(tx, {
     ...input,
-    contactAddress: contact.address,
+    channel,
+    address: contact.address,
     region: contact.region,
     body,
     status: 'queued',
+    fallbackChannels: fallback,
   });
 
   await emit(tx, {
@@ -255,12 +327,43 @@ export async function send(
     type: 'message.queued',
     subjectType: 'message',
     subjectId: row.id,
-    payload: { channel: input.channel, purpose: input.purpose, provider: config.provider },
+    payload: {
+      channel,
+      purpose: input.purpose,
+      provider: config.provider,
+      fallbackChannels: fallback,
+    },
   });
 
-  await enqueue(SEND_JOB, { messageId: row.id });
+  await enqueue(tx, SEND_JOB, { messageId: row.id });
 
   return row;
+}
+
+/** A template is unfit when the channel needs a piece the template has not got. */
+export async function renderFor(
+  channel: Channel,
+  template: TemplateRow,
+  variables: Record<string, unknown>,
+): Promise<{ body: string; subject?: string }> {
+  if (channel === 'email' && !template.subject) {
+    throw new MessagingError(
+      'template_unfit',
+      422,
+      `template ${template.name} has no subject, which email requires`,
+    );
+  }
+  if (channel === 'whatsapp' && !template.provider_ref) {
+    throw new MessagingError(
+      'template_unfit',
+      422,
+      `template ${template.name} has no provider_ref, which whatsapp requires`,
+    );
+  }
+
+  const body = await render(template.body, variables);
+  if (!template.subject) return { body };
+  return { body, subject: await render(template.subject, variables) };
 }
 
 async function insertMessage(
@@ -268,21 +371,30 @@ async function insertMessage(
   input: {
     tenantId: string;
     channel: Channel;
-    contactAddress: string;
+    contact: ContactInput;
+    address: string;
     region: string | null;
     purpose: Purpose;
     template: string;
     body: string;
+    variables?: Record<string, unknown> | undefined;
     status: 'blocked' | 'queued';
     blockedReason?: string;
+    fallbackChannels: Channel[];
+    parentMessageId?: string | undefined;
   },
 ): Promise<MessageRow> {
   const [row] = await tx<MessageRow[]>`
     insert into messages
-      (tenant_id, channel, address, region, purpose, template_name, body, status, blocked_reason)
-    values (${input.tenantId}, ${input.channel}, ${input.contactAddress}, ${input.region},
+      (tenant_id, channel, address, region, purpose, template_name, body, status,
+       blocked_reason, contact, variables, fallback_channels, parent_message_id)
+    values (${input.tenantId}, ${input.channel}, ${input.address}, ${input.region},
             ${input.purpose}, ${input.template}, ${input.body}, ${input.status},
-            ${input.blockedReason ?? null})
+            ${input.blockedReason ?? null},
+            ${tx.json(input.contact as never)},
+            ${tx.json((input.variables ?? {}) as never)},
+            ${input.fallbackChannels},
+            ${input.parentMessageId ?? null})
     returning *
   `;
   if (!row) throw new Error('send inserted no message row');

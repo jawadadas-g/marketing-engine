@@ -4,6 +4,9 @@ export type MessagingErrorCode =
   | 'template_variable_missing'
   | 'template_invalid'
   | 'unsubscribe_text_required'
+  | 'address_missing'
+  | 'template_unfit'
+  | 'no_channel'
   | 'credentials_rejected'
   | 'unknown_provider';
 
