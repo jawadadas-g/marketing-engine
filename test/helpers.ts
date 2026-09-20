@@ -1,6 +1,8 @@
 import { SignJWT } from 'jose';
 import { closeDb, db } from '../src/db/client.js';
 import { migrate } from '../src/db/migrate.js';
+import { startJobs, stopJobs } from '../src/jobs/index.js';
+import { SEND_JOB } from '../src/modules/messaging/index.js';
 
 export const TENANT_A = '11111111-1111-1111-1111-111111111111';
 export const TENANT_B = '22222222-2222-2222-2222-222222222222';
@@ -15,7 +17,11 @@ export const TENANT_B = '22222222-2222-2222-2222-222222222222';
 export async function resetDb(): Promise<void> {
   await migrate();
   await db()`delete from rules where scope = 'tenant'`;
-  await db()`truncate idempotency_keys, events, consent, suppression restart identity`;
+  await db()`
+    truncate idempotency_keys, events, consent, suppression,
+             messages, templates, tenant_channel_configs restart identity
+  `;
+  await clearSendJobs();
   await db()`
     insert into tenants (id, name) values
       (${TENANT_A}, 'Tenant A'),
@@ -25,7 +31,31 @@ export async function resetDb(): Promise<void> {
 }
 
 export async function teardownDb(): Promise<void> {
+  await stopJobs();
   await closeDb();
+}
+
+/**
+ * Start the queue without workers, so a test can assert what was enqueued
+ * instead of racing the worker that would consume it.
+ */
+export async function startQueue(): Promise<void> {
+  await startJobs({ registerWorkers: false });
+}
+
+async function clearSendJobs(): Promise<void> {
+  const [exists] = await db()`
+    select 1 from information_schema.tables
+    where table_schema = 'pgboss' and table_name = 'job'
+  `;
+  if (exists) await db()`delete from pgboss.job where name = ${SEND_JOB}`;
+}
+
+export async function sendJobCount(): Promise<number> {
+  const [row] = await db()<{ count: string }[]>`
+    select count(*)::text as count from pgboss.job where name = ${SEND_JOB}
+  `;
+  return Number(row?.count ?? 0);
 }
 
 export async function tokenFor(tenantId: string): Promise<string> {

@@ -11,3 +11,6 @@ if (!testUrl) {
 }
 process.env.DATABASE_URL = testUrl;
 process.env.JWT_SECRET ??= 'test-secret';
+process.env.CREDENTIALS_KEY ??=
+  '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+process.env.WEBHOOK_TOKEN ??= 'test-webhook-token';
