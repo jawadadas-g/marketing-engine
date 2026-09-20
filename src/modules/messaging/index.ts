@@ -258,7 +258,7 @@ export async function send(
     payload: { channel: input.channel, purpose: input.purpose, provider: config.provider },
   });
 
-  await enqueue(SEND_JOB, { messageId: row.id });
+  await enqueue(tx, SEND_JOB, { messageId: row.id });
 
   return row;
 }

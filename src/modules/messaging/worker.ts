@@ -17,9 +17,8 @@ export async function processSend(
   const [message] = await db()<MessageRow[]>`
     select * from messages where id = ${messageId}
   `;
-  // The job is enqueued before the sending transaction commits, so a job can
-  // briefly arrive ahead of its row. Throwing lets pg-boss come back.
-  if (!message) throw new Error(`message ${messageId} not found`);
+  // The job commits with its message row, so a job without one is a bug.
+  if (!message) throw new Error(`message ${messageId} has a job but no row`);
   if (message.status !== 'queued') return;
 
   const [config] = await db()<ChannelConfigRow[]>`
