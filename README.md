@@ -57,6 +57,12 @@ never part of `npm test` or CI.
 | `GET /v1/companies?identifier=cr:101…` | Bearer JWT | the same, found by identifier |
 | `PUT /v1/companies/:id/view` | Bearer JWT | your relationship, tags and notes for it |
 | `POST /v1/companies/import` | Bearer JWT | bulk CSV import |
+| `POST /v1/discovery/search` | Bearer JWT | ranked off-platform buyers from the pool |
+| `PUT /v1/companies/:id/profile` | Bearer JWT | what a company buys, sells, its sector and city |
+| `POST /v1/companies/:id/invite` | Bearer JWT | invite a company to the marketplace |
+| `GET /v1/invites/:id` | Bearer JWT | one of your invites |
+| `GET /i/:token` | public | the invite link; redirects to signup |
+| `POST /internal/invites/accept` | `X-Internal-Token` | the marketplace reporting a signup |
 
 Auth is a Bearer JWT signed HS256 with `JWT_SECRET` and carrying a
 `tenant_id` claim. Anything else is a 401.
@@ -289,6 +295,53 @@ field names in `wathq.ts` are best guesses and the adapter keeps the entire
 payload in `raw` regardless. Before relying on it, make one real call, look at
 the body, and fix `factsFrom`; the `raw` on any `lookup` source row already
 written is enough to do that retrospectively.
+
+## Discovery
+
+A supplier asks which off-platform corporate buyers it should talk to, and gets
+a ranked list out of the prospect pool. Companies already on the marketplace
+(`on_platform_ref` set) and companies merged away are never returned.
+
+**The matching algorithm is a placeholder, deliberately.** The `basic` finder is
+an AND of exact filters on profile fields plus trigram matching on the name, so
+every row it returns matched everything that was asked and scores 1.0. It is
+not a ranking. What is real is the seam around it: the endpoint, the invite
+loop, and a `finder_runs` row for every search recording the query, the result
+count and how long it took — which is the evidence whoever picks the real
+algorithm should choose it on.
+
+### Adding a finder
+
+1. Write one file implementing `Finder` in `src/modules/discovery/finder/`.
+2. Register it in `finder/index.ts` with `registerFinder`.
+3. Set `FINDER=<name>`.
+
+Nothing else in the engine knows which algorithm is running. Any implementation
+must never return a merged-away or on-platform company, never exceed `limit`,
+and keep `score` comparable within itself (scores from different finders are
+not comparable with each other).
+
+### The invite handshake
+
+An invite is not a special kind of message: it is a transactional send carrying
+a token, so consent and the sending rules apply to it like anything else. If
+`can_send` refuses, no invite row is written and the blocked message is
+returned with 200.
+
+The marketplace implements three steps:
+
+1. The invited company follows `GET /i/<token>`, which redirects 302 to
+   `{MARKETPLACE_SIGNUP_URL}?invite=<token>`. An expired or already-used token
+   gets a plain 410.
+2. The signup form carries `invite` through to the account it creates.
+3. Once the account exists, the marketplace calls
+   `POST /internal/invites/accept` with `{ token, ref }` and the header
+   `X-Internal-Token: <INTERNAL_TOKEN>` — its own key, not a tenant JWT. The
+   engine marks the invite accepted, stamps `on_platform_ref = ref` on the
+   company, expires any other open invites for it, and emits `invite.accepted`
+   under the inviting tenant. A second accept is a 409.
+
+From then on the company is out of the prospect pool's results.
 
 ## Tenant isolation
 
