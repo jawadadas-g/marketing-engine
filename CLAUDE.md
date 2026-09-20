@@ -37,11 +37,11 @@ src/
   jobs/           pg-boss registration and workers
 test/
 docs/
-briefs/
+  briefs/         one brief per roadmap step
 ```
 
 ## Working agreement
-- Work from the brief in `briefs/NN-*.md` that I point you to. Do only what it says.
+- Work from the brief in `docs/briefs/NN-*.md` that I point you to. Do only what it says.
 - Migrations are plain SQL files. Never edit an applied migration; add a new one.
 - Every step ends with its "done when" check passing as an automated test, not a manual claim.
 - Commit in small, named commits. Open one PR per brief. Do not merge.
