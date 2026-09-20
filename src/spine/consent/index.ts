@@ -118,15 +118,24 @@ export async function canSend(
     purpose: Purpose;
     at?: Date | undefined;
     defaultCountry?: string | undefined;
+    /**
+     * false stops after suppression and consent. Channel selection asks that
+     * question of every candidate channel; the sending window is then applied
+     * once, to the channel it picked.
+     */
+    checkRules?: boolean | undefined;
   },
 ): Promise<CanSendResult> {
   const contact = normalize(input);
   const at = input.at ?? new Date();
 
-  // 1. Suppression. RLS already limits this to platform rows and this tenant's.
+  // 1. Suppression: platform-wide blocks and this tenant's own. Scoped in the
+  // query as well as by RLS, because callers that run as the owning role (the
+  // send worker's fallback) are not subject to the policy.
   const [suppressed] = await tx<{ id: string }[]>`
     select id from suppression
     where channel = ${contact.channel} and address = ${contact.address}
+      and (tenant_id is null or tenant_id = ${input.tenantId})
     order by tenant_id nulls first
     limit 1
   `;
@@ -145,6 +154,8 @@ export async function canSend(
     `;
     if (latest?.status !== 'granted') return { allowed: false, reason: 'no_consent' };
   }
+
+  if (input.checkRules === false) return { allowed: true };
 
   // 3. Region-scoped sending rules, in the contact's own local time.
   const timezone = await timezoneFor(tx, contact.region);
