@@ -1,0 +1,167 @@
+import type { Tx } from '../../db/client.js';
+import { canSend } from '../../spine/consent/index.js';
+import { CHANNELS, normalize, type Channel, type Purpose } from '../../spine/contacts/normalize.js';
+import { decide } from '../../spine/rules/index.js';
+
+export type ContactInput = {
+  phone?: string | undefined;
+  email?: string | undefined;
+  telegram?: string | undefined;
+};
+
+/** One address per channel. A phone serves both SMS and WhatsApp. */
+export function addressFor(contact: ContactInput, channel: Channel): string | undefined {
+  switch (channel) {
+    case 'sms':
+    case 'whatsapp':
+      return contact.phone;
+    case 'email':
+      return contact.email;
+    case 'telegram':
+      return contact.telegram;
+  }
+}
+
+export type Selection = {
+  chosen?: { channel: Channel; address: string };
+  /** The channels after the chosen one, to try if it fails for good. */
+  fallback: Channel[];
+  /** Why each candidate was not chosen, for the blocked event's payload. */
+  reasons: Record<string, string>;
+};
+
+/**
+ * Decide which channel this intent goes out on.
+ *
+ * Suppression and consent are asked of every candidate first, because a rule
+ * should be able to see which channels the contact actually agreed to. The
+ * sending window is then applied only to the channel that wins, so a quiet hour
+ * on SMS does not stop an email.
+ */
+export async function selectChannel(
+  tx: Tx,
+  input: {
+    tenantId: string;
+    contact: ContactInput;
+    purpose: Purpose;
+    preferred?: Channel | undefined;
+    configuredChannels: Set<Channel>;
+    at?: Date | undefined;
+    defaultCountry?: string | undefined;
+  },
+): Promise<Selection> {
+  const reasons: Record<string, string> = {};
+
+  const available: Channel[] = [];
+  for (const channel of CHANNELS) {
+    const address = addressFor(input.contact, channel);
+    if (!address) {
+      reasons[channel] = 'no_address';
+      continue;
+    }
+    if (!input.configuredChannels.has(channel)) {
+      reasons[channel] = 'channel_not_configured';
+      continue;
+    }
+    available.push(channel);
+  }
+
+  const consented: Record<string, boolean> = {};
+  for (const channel of available) {
+    const verdict = await canSend(tx, {
+      tenantId: input.tenantId,
+      channel,
+      address: addressFor(input.contact, channel)!,
+      purpose: input.purpose,
+      checkRules: false,
+      ...(input.defaultCountry ? { defaultCountry: input.defaultCountry } : {}),
+    });
+    consented[channel] = verdict.allowed;
+    if (!verdict.allowed) reasons[channel] = verdict.reason;
+  }
+
+  const ordered = await orderFor(tx, input, available, consented);
+
+  for (let i = 0; i < ordered.length; i += 1) {
+    const channel = ordered[i]!;
+    const address = addressFor(input.contact, channel)!;
+
+    const verdict = await canSend(tx, {
+      tenantId: input.tenantId,
+      channel,
+      address,
+      purpose: input.purpose,
+      ...(input.at ? { at: input.at } : {}),
+      ...(input.defaultCountry ? { defaultCountry: input.defaultCountry } : {}),
+    });
+
+    if (verdict.allowed) {
+      // Everything after the winner is the fallback order. Their verdicts are
+      // not cached: by the time a fallback runs, a quiet hour may have passed.
+      return { chosen: { channel, address }, fallback: ordered.slice(i + 1), reasons };
+    }
+    reasons[channel] = verdict.reason === 'rule' ? `rule:${verdict.rule?.name}` : verdict.reason;
+  }
+
+  return { fallback: [], reasons };
+}
+
+async function orderFor(
+  tx: Tx,
+  input: {
+    tenantId: string;
+    contact: ContactInput;
+    purpose: Purpose;
+    preferred?: Channel | undefined;
+    defaultCountry?: string | undefined;
+  },
+  available: Channel[],
+  consented: Record<string, boolean>,
+): Promise<Channel[]> {
+  const region = regionOf(input.contact, input.defaultCountry);
+
+  const ruled = await decide<unknown>(tx, {
+    kind: 'channel_selection',
+    tenantId: input.tenantId,
+    region,
+    context: {
+      purpose: input.purpose,
+      region,
+      preferred: input.preferred ?? null,
+      available,
+      consented: Object.fromEntries(CHANNELS.map((c) => [c, consented[c] ?? false])),
+    },
+  });
+
+  const fromRule = Array.isArray(ruled.value) ? (ruled.value as unknown[]) : null;
+
+  // No rule decided: the caller's preference first, then the default order.
+  const order = fromRule
+    ? fromRule.map(String)
+    : [input.preferred, 'whatsapp', 'sms', 'email', 'telegram'].filter(Boolean).map(String);
+
+  const seen = new Set<string>();
+  return order.filter((c): c is Channel => {
+    if (seen.has(c)) return false;
+    seen.add(c);
+    return available.includes(c as Channel);
+  });
+}
+
+/**
+ * The region a region-scoped rule is matched on. Only a phone implies one, so
+ * a contact reachable solely by email or telegram has none and sees platform
+ * and tenant rules only.
+ */
+function regionOf(contact: ContactInput, defaultCountry?: string): string | null {
+  if (!contact.phone) return null;
+  try {
+    return normalize({
+      channel: 'sms',
+      address: contact.phone,
+      ...(defaultCountry ? { defaultCountry } : {}),
+    }).region;
+  } catch {
+    return null;
+  }
+}
