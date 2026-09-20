@@ -1,5 +1,5 @@
 import PgBoss from 'pg-boss';
-import { db, type Tx } from '../db/client.js';
+import { asOwner, db, type Tx } from '../db/client.js';
 import { SEND_JOB } from '../modules/messaging/index.js';
 import { processSend } from '../modules/messaging/worker.js';
 
@@ -73,21 +73,13 @@ export async function enqueue(tx: Tx, name: string, data: object = {}): Promise<
 
   // The queue is infrastructure the API role does not own: marketing_app has
   // no rights in the pgboss schema, and giving it some would tie us to
-  // pg-boss's table layout. Instead the owning role is resumed for the insert
-  // and handed straight back, inside the one transaction. LOCAL throughout, so
-  // a rollback undoes the job with everything else.
-  const [current] = await tx<{ role: string }[]>`select current_user::text as role`;
-  const asAppRole = current?.role === 'marketing_app';
-
-  if (asAppRole) await tx`set local role none`;
-  try {
-    return await boss.send(name, data, {
+  // pg-boss's table layout.
+  return asOwner(tx, () =>
+    boss!.send(name, data, {
       db: onTransaction(tx),
       ...(name === SEND_JOB ? { retryLimit: SEND_RETRY_LIMIT, retryBackoff: true } : {}),
-    });
-  } finally {
-    if (asAppRole) await tx`set local role marketing_app`;
-  }
+    }),
+  );
 }
 
 /** pg-boss speaks to whatever exposes executeSql; hand it the open transaction. */

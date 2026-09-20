@@ -31,6 +31,27 @@ export async function closeDb(): Promise<void> {
 }
 
 /**
+ * Run `fn` with the owning role, inside the caller's transaction, then hand the
+ * role straight back.
+ *
+ * For the few operations that are the platform's rather than a tenant's: the
+ * queue, which the API role has no rights on, and a registry merge, which
+ * rewrites pool-wide bookkeeping including rows belonging to other tenants. It
+ * is LOCAL throughout, so a rollback undoes everything with it.
+ */
+export async function asOwner<T>(tx: Tx, fn: () => Promise<T>): Promise<T> {
+  const [current] = await tx<{ role: string }[]>`select current_user::text as role`;
+  const escalate = current?.role === 'marketing_app';
+
+  if (escalate) await tx`set local role none`;
+  try {
+    return await fn();
+  } finally {
+    if (escalate) await tx`set local role marketing_app`;
+  }
+}
+
+/**
  * Run `fn` in a transaction scoped to one tenant.
  *
  * Both settings are LOCAL, so they are dropped when the transaction ends and

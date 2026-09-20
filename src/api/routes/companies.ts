@@ -152,6 +152,19 @@ companies.post('/v1/companies/import', async (c) => {
       .filter((type) => row[type])
       .map((type) => ({ type, value: row[type] }));
 
+    // A row that offered identifiers and had none of them survive normalisation
+    // contributes nothing we could ever match on, and would land as a name-only
+    // company that quietly duplicates. Reject it and say which line.
+    if (identifiers.length > 0) {
+      const { identifiers: usable, rejected: bad } = normalizeIdentifiers(identifiers, {
+        ...(row.country ? { defaultCountry: row.country.toUpperCase() } : {}),
+      });
+      if (usable.length === 0) {
+        rejected.push({ row: lineNumber, reason: bad[0]?.reason ?? 'no usable identifier' });
+        continue;
+      }
+    }
+
     try {
       const result = await withTenant(tenantId, (tx) =>
         upsert(tx, {

@@ -1,18 +1,18 @@
-import type { Tx } from '../../db/client.js';
-import { emit } from '../events/index.js';
+import { asOwner, type Tx } from "../../db/client.js";
+import { emit } from "../events/index.js";
 import {
   isStrong,
   normalizeIdentifiers,
   type Identifier,
   type IdentifierType,
   type RawIdentifier,
-} from './identifiers.js';
-import { companyLookup, type CompanyFacts } from './lookup/index.js';
-import { normalizeName } from './names.js';
+} from "./identifiers.js";
+import { companyLookup, type CompanyFacts } from "./lookup/index.js";
+import { normalizeName } from "./names.js";
 
-export * from './identifiers.js';
-export * from './lookup/index.js';
-export { normalizeName } from './names.js';
+export * from "./identifiers.js";
+export * from "./lookup/index.js";
+export { normalizeName } from "./names.js";
 
 /**
  * How alike two normalised names must be before the registry links them.
@@ -49,14 +49,14 @@ export type SourceRow = {
   id: string;
   company_id: string;
   tenant_id: string | null;
-  source_type: 'rfq' | 'import' | 'api' | 'lookup';
+  source_type: "rfq" | "import" | "api" | "lookup";
   source_ref: string | null;
   data: Record<string, unknown>;
   recorded_at: Date;
 };
 
 export type TenantView = {
-  relationship?: 'customer' | 'supplier' | 'prospect' | 'other' | undefined;
+  relationship?: "customer" | "supplier" | "prospect" | "other" | undefined;
   tags?: string[] | undefined;
   notes?: string | undefined;
 };
@@ -66,7 +66,7 @@ export type UpsertInput = {
   country?: string | undefined;
   identifiers: RawIdentifier[];
   source: {
-    type: 'rfq' | 'import' | 'api' | 'lookup';
+    type: "rfq" | "import" | "api" | "lookup";
     ref?: string | undefined;
     tenantId?: string | undefined;
     data?: Record<string, unknown> | undefined;
@@ -84,12 +84,17 @@ export type UpsertResult = {
 };
 
 /** Follow merged_into to the company that survived. */
-export async function resolve(tx: Tx, id: string): Promise<CompanyRow | undefined> {
+export async function resolve(
+  tx: Tx,
+  id: string,
+): Promise<CompanyRow | undefined> {
   let [row] = await tx<CompanyRow[]>`select * from companies where id = ${id}`;
   const seen = new Set<string>();
   while (row?.merged_into && !seen.has(row.id)) {
     seen.add(row.id);
-    [row] = await tx<CompanyRow[]>`select * from companies where id = ${row.merged_into}`;
+    [row] = await tx<
+      CompanyRow[]
+    >`select * from companies where id = ${row.merged_into}`;
   }
   return row;
 }
@@ -113,7 +118,10 @@ export type CompanyDetail = {
 };
 
 /** The company, plus what the calling tenant is allowed to see about it. */
-export async function get(tx: Tx, id: string): Promise<CompanyDetail | undefined> {
+export async function get(
+  tx: Tx,
+  id: string,
+): Promise<CompanyDetail | undefined> {
   const company = await resolve(tx, id);
   if (!company) return undefined;
 
@@ -138,7 +146,10 @@ export async function get(tx: Tx, id: string): Promise<CompanyDetail | undefined
  * two records were the same company all along and get merged. Only when no
  * strong identifier matches does the name get a say, and then only to link.
  */
-export async function upsert(tx: Tx, input: UpsertInput): Promise<UpsertResult> {
+export async function upsert(
+  tx: Tx,
+  input: UpsertInput,
+): Promise<UpsertResult> {
   // Ask the registrar first, if asked to. What it says about the name is
   // better than what a spreadsheet says, and it earns its own source row
   // alongside the caller's, so both are on the record.
@@ -168,7 +179,12 @@ export async function upsert(tx: Tx, input: UpsertInput): Promise<UpsertResult> 
     if (linked) {
       company = linked;
     } else {
-      company = await insertCompany(tx, input.name, nameNormalized, input.country ?? null);
+      company = await insertCompany(
+        tx,
+        input.name,
+        nameNormalized,
+        input.country ?? null,
+      );
       created = true;
     }
   }
@@ -178,10 +194,10 @@ export async function upsert(tx: Tx, input: UpsertInput): Promise<UpsertResult> 
 
   for (const identifier of identifiers) {
     const outcome = await attach(tx, company.id, identifier);
-    if (outcome.kind === 'added') added.push(identifier);
-    else if (outcome.kind === 'conflict') {
+    if (outcome.kind === "added") added.push(identifier);
+    else if (outcome.kind === "conflict") {
       conflicts.push({ ...identifier, heldBy: outcome.heldBy });
-    } else if (outcome.kind === 'raced') {
+    } else if (outcome.kind === "raced") {
       // A strong identifier appeared under another company between our match
       // and our insert. Re-run identity once with the full picture.
       matches = await companiesOwning(tx, strong);
@@ -197,7 +213,7 @@ export async function upsert(tx: Tx, input: UpsertInput): Promise<UpsertResult> 
 
   // A later source only fills gaps, except one that came from the registrar,
   // which is better than whatever a spreadsheet said.
-  const authoritative = input.source.type === 'lookup' || enrichment !== null;
+  const authoritative = input.source.type === "lookup" || enrichment !== null;
   if (authoritative || !company.country) {
     const [updated] = await tx<CompanyRow[]>`
       update companies set
@@ -235,14 +251,19 @@ export async function upsert(tx: Tx, input: UpsertInput): Promise<UpsertResult> 
   }
 
   if (input.source.tenantId) {
-    await upsertTenantView(tx, input.source.tenantId, company.id, input.tenantView);
+    await upsertTenantView(
+      tx,
+      input.source.tenantId,
+      company.id,
+      input.tenantView,
+    );
   }
 
   if (input.source.tenantId) {
     await emit(tx, {
       tenantId: input.source.tenantId,
-      type: created ? 'company.created' : 'company.updated',
-      subjectType: 'company',
+      type: created ? "company.created" : "company.updated",
+      subjectType: "company",
       subjectId: company.id,
       payload: {
         identifiers: added,
@@ -266,7 +287,9 @@ async function enrichFromRegistrar(
   const lookup = companyLookup();
   if (!lookup) return null;
 
-  const cr = normalizeIdentifiers(input.identifiers).identifiers.find((i) => i.type === 'cr');
+  const cr = normalizeIdentifiers(input.identifiers).identifiers.find(
+    (i) => i.type === "cr",
+  );
   if (!cr) return null;
 
   const facts = await lookup.byCr(cr.value).catch((err) => {
@@ -278,22 +301,29 @@ async function enrichFromRegistrar(
   return { facts, ref: `${lookup.provider}:${cr.value}` };
 }
 
-/** Distinct live companies owning any of these identifiers, oldest first. */
-async function companiesOwning(tx: Tx, identifiers: Identifier[]): Promise<CompanyRow[]> {
-  if (identifiers.length === 0) return [];
-
-  const rows = await tx<IdentifierRow[]>`
-    select * from company_identifiers
-    where (type, value) in ${tx(identifiers.map((i) => [i.type, i.value]))}
-  `;
-
+/**
+ * Distinct live companies owning any of these identifiers, oldest first.
+ * One indexed lookup each: the unique key on (type, value) makes them cheap,
+ * and an upsert never carries more than a handful of identifiers.
+ */
+async function companiesOwning(
+  tx: Tx,
+  identifiers: Identifier[],
+): Promise<CompanyRow[]> {
   const found = new Map<string, CompanyRow>();
-  for (const row of rows) {
-    const company = await resolve(tx, row.company_id);
+
+  for (const identifier of identifiers) {
+    const company = await findByIdentifier(
+      tx,
+      identifier.type,
+      identifier.value,
+    );
     if (company) found.set(company.id, company);
   }
 
-  return [...found.values()].sort((a, b) => a.created_at.getTime() - b.created_at.getTime());
+  return [...found.values()].sort(
+    (a, b) => a.created_at.getTime() - b.created_at.getTime(),
+  );
 }
 
 /**
@@ -308,14 +338,18 @@ async function merge(
   const [survivor, ...losers] = companies;
   const loserIds = losers.map((c) => c.id);
 
-  for (const loser of losers) {
-    await tx`update company_identifiers set company_id = ${survivor!.id} where company_id = ${loser.id}`;
-    await tx`update company_sources set company_id = ${survivor!.id} where company_id = ${loser.id}`;
-    await tx`update messages set company_id = ${survivor!.id} where company_id = ${loser.id}`;
+  // A merge rewrites rows that belong to the pool and to other tenants:
+  // provenance, message stamps, and every tenant's own view. That is the
+  // platform's job, not the calling tenant's, so it runs as the owner.
+  await asOwner(tx, async () => {
+    for (const loser of losers) {
+      await tx`update company_identifiers set company_id = ${survivor!.id} where company_id = ${loser.id}`;
+      await tx`update company_sources set company_id = ${survivor!.id} where company_id = ${loser.id}`;
+      await tx`update messages set company_id = ${survivor!.id} where company_id = ${loser.id}`;
 
-    // A tenant that knew both companies ends up with one view: tags unioned,
-    // notes kept end to end, rather than one silently winning.
-    await tx`
+      // A tenant that knew both companies ends up with one view: tags unioned,
+      // notes kept end to end, rather than one silently winning.
+      await tx`
       update tenant_company t set
         tags  = (select array(select distinct unnest(t.tags || l.tags))),
         notes = case
@@ -330,7 +364,7 @@ async function merge(
         and t.company_id = ${survivor!.id}
         and t.tenant_id = l.tenant_id
     `;
-    await tx`
+      await tx`
       delete from tenant_company l
       where l.company_id = ${loser.id}
         and exists (
@@ -338,19 +372,20 @@ async function merge(
           where t.company_id = ${survivor!.id} and t.tenant_id = l.tenant_id
         )
     `;
-    await tx`update tenant_company set company_id = ${survivor!.id} where company_id = ${loser.id}`;
+      await tx`update tenant_company set company_id = ${survivor!.id} where company_id = ${loser.id}`;
 
-    await tx`
+      await tx`
       update companies set merged_into = ${survivor!.id}, updated_at = now()
       where id = ${loser.id}
     `;
-  }
+    }
+  });
 
   if (tenantId && loserIds.length) {
     await emit(tx, {
       tenantId,
-      type: 'company.merged',
-      subjectType: 'company',
+      type: "company.merged",
+      subjectType: "company",
       subjectId: survivor!.id,
       payload: { survivor: survivor!.id, losers: loserIds },
     });
@@ -388,15 +423,15 @@ async function insertCompany(
     values (${name}, ${nameNormalized}, ${country})
     returning *
   `;
-  if (!row) throw new Error('registry.upsert inserted no company');
+  if (!row) throw new Error("registry.upsert inserted no company");
   return row;
 }
 
 type AttachOutcome =
-  | { kind: 'added' }
-  | { kind: 'present' }
-  | { kind: 'conflict'; heldBy: string }
-  | { kind: 'raced' };
+  | { kind: "added" }
+  | { kind: "present" }
+  | { kind: "conflict"; heldBy: string }
+  | { kind: "raced" };
 
 /**
  * A weak identifier already pointing elsewhere is left where it is: a phone
@@ -414,14 +449,14 @@ async function attach(
     on conflict (type, value) do nothing
     returning *
   `;
-  if (inserted[0]) return { kind: 'added' };
+  if (inserted[0]) return { kind: "added" };
 
   const holder = await findByIdentifier(tx, identifier.type, identifier.value);
-  if (!holder || holder.id === companyId) return { kind: 'present' };
+  if (!holder || holder.id === companyId) return { kind: "present" };
 
   return isStrong(identifier.type)
-    ? { kind: 'raced' }
-    : { kind: 'conflict', heldBy: holder.id };
+    ? { kind: "raced" }
+    : { kind: "conflict", heldBy: holder.id };
 }
 
 export async function upsertTenantView(
