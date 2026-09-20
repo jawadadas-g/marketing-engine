@@ -6,6 +6,7 @@ import {
   redactConfig,
   send,
   storeChannelConfig,
+  type ContactInput,
   upsertTemplate,
   validateChannelConfig,
   type MessageRow,
@@ -25,17 +26,50 @@ const channelConfigBody = z.object({
 const templateBody = z.object({
   channel,
   body: z.string().min(1).max(5000),
+  subject: z.string().min(1).max(500).optional(),
+  providerRef: z.record(z.unknown()).optional(),
 });
 
-const sendBody = z.object({
-  channel,
-  address: z.string().min(1),
-  purpose: z.enum(PURPOSES),
-  template: z.string().min(1).max(200),
-  variables: z.record(z.unknown()).optional(),
-  defaultCountry: z.string().length(2).optional(),
-  at: z.coerce.date().optional(),
-});
+const contactShape = z
+  .object({
+    phone: z.string().min(1).optional(),
+    email: z.string().min(1).optional(),
+    telegram: z.string().min(1).optional(),
+  })
+  .refine((c) => c.phone ?? c.email ?? c.telegram, {
+    message: 'contact needs at least one of phone, email or telegram',
+  });
+
+const sendBody = z
+  .object({
+    contact: contactShape.optional(),
+    channel: channel.optional(),
+    // The step 3 shape. Accepted for one release, then removed.
+    address: z.string().min(1).optional(),
+    purpose: z.enum(PURPOSES),
+    template: z.string().min(1).max(200),
+    variables: z.record(z.unknown()).optional(),
+    defaultCountry: z.string().length(2).optional(),
+    at: z.coerce.date().optional(),
+  })
+  .refine((b) => b.contact ?? (b.channel && b.address), {
+    message: 'send needs a contact, or the older channel and address pair',
+  });
+
+/** Fold the old { channel, address } shape into a contact. */
+function contactOf(body: z.infer<typeof sendBody>): ContactInput {
+  if (body.contact) return body.contact;
+  const address = body.address!;
+  switch (body.channel!) {
+    case 'sms':
+    case 'whatsapp':
+      return { phone: address };
+    case 'email':
+      return { email: address };
+    case 'telegram':
+      return { telegram: address };
+  }
+}
 
 export const messaging = new Hono<AuthVars>();
 
@@ -62,7 +96,8 @@ messaging.get('/v1/channels/:channel', async (c) => {
   const ch = channel.safeParse(c.req.param('channel'));
   if (!ch.success) return c.json({ error: 'unknown channel' }, 404);
 
-  const row = await withTenant(c.get('tenantId'), (tx) => getChannelConfig(tx, ch.data));
+  const tenantId = c.get('tenantId');
+  const row = await withTenant(tenantId, (tx) => getChannelConfig(tx, tenantId, ch.data));
   return row ? c.json({ channel: redactConfig(row) }) : c.json({ error: 'not found' }, 404);
 });
 
@@ -83,7 +118,10 @@ messaging.post('/v1/messages', async (c) => {
   if (!parsed.success) return c.json({ error: 'invalid body', detail: parsed.error.issues }, 400);
 
   const tenantId = c.get('tenantId');
-  const row = await withTenant(tenantId, (tx) => send(tx, { tenantId, ...parsed.data }));
+  const { address: _legacy, contact: _contact, ...rest } = parsed.data;
+  const row = await withTenant(tenantId, (tx) =>
+    send(tx, { tenantId, ...rest, contact: contactOf(parsed.data) }),
+  );
 
   // 202 when it is on the queue, 200 when can_send refused and nothing will go.
   return c.json({ message: serialise(row) }, row.status === 'queued' ? 202 : 200);
@@ -110,6 +148,8 @@ function serialise(row: MessageRow) {
     template: row.template_name,
     body: row.body,
     status: row.status,
+    fallbackChannels: row.fallback_channels,
+    parentMessageId: row.parent_message_id,
     provider: row.provider,
     providerMessageId: row.provider_message_id,
     blockedReason: row.blocked_reason,
