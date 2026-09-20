@@ -109,23 +109,27 @@ export async function applyDeliveryReport(input: {
     return;
   }
 
-  const [message] = await db()<MessageRow[]>`
-    select * from messages
-    where provider = ${input.provider} and provider_message_id = ${input.providerMessageId}
-  `;
-  if (!message) {
-    console.warn(
-      `webhook: ${input.provider} reported unknown message ${input.providerMessageId}`,
-      input.raw,
-    );
-    return;
-  }
-
   await db().begin(async (tx) => {
-    await tx`
+    // Only a message still in flight moves. A report that arrives twice, or
+    // after the message already reached a final state, updates no row and so
+    // emits nothing: the guard and the event are decided by the same statement.
+    const moved = await tx<MessageRow[]>`
       update messages set status = ${input.status}, updated_at = now()
-      where id = ${message.id}
+      where provider = ${input.provider}
+        and provider_message_id = ${input.providerMessageId}
+        and status = 'sent'
+      returning *
     `;
+
+    const message = moved[0];
+    if (!message) {
+      console.warn(
+        `webhook: ${input.provider} report for ${input.providerMessageId} matched nothing in flight`,
+        input.raw,
+      );
+      return;
+    }
+
     await emit(tx, {
       tenantId: message.tenant_id,
       type: input.status === 'delivered' ? 'message.delivered' : 'message.failed',
