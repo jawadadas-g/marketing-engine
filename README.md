@@ -27,6 +27,10 @@ npm run dev                 # start the service on $PORT (default 3000)
 `npm test` runs the suite against `DATABASE_URL_TEST`. It migrates and truncates
 that database, so point it at a throwaway one.
 
+`npm run test:live` sends one real SMS through Taqnyat. It is skipped unless
+`TAQNYAT_BEARER`, `TAQNYAT_SENDER` and `LIVE_SMS_TO` are all set, and it is
+never part of `npm test` or CI.
+
 `npm run build` compiles to `dist/`; `npm start` runs the build.
 
 ## API
@@ -40,6 +44,12 @@ that database, so point it at a throwaway one.
 | `POST /v1/suppression` | Bearer JWT | block an address for this tenant |
 | `GET /v1/can-send?channel=&address=&purpose=&at=` | Bearer JWT | ask whether a message may go out |
 | `GET /v1/rules`, `POST /v1/rules`, `DELETE /v1/rules/:id` | Bearer JWT | read all rules; create and delete this tenant's own |
+| `PUT /v1/channels/:channel` | Bearer JWT | store this tenant's provider credentials for a channel |
+| `GET /v1/channels/:channel` | Bearer JWT | the channel's provider and sender, never the credentials |
+| `PUT /v1/templates/:name` | Bearer JWT | create or replace a Liquid template |
+| `POST /v1/messages` | Bearer JWT | send intent: 202 when queued, 200 when `can_send` refused |
+| `GET /v1/messages/:id` | Bearer JWT | one message and its status |
+| `POST /webhooks/:provider/:token` | token in the URL | provider delivery reports |
 
 Auth is a Bearer JWT signed HS256 with `JWT_SECRET` and carrying a
 `tenant_id` claim. Anything else is a 401.
@@ -77,6 +87,47 @@ what picks the time zone a sending window is measured in; email and telegram
 have no region, so only platform and tenant rules apply to them. Pass
 `defaultCountry` (ISO 3166-1 alpha-2) alongside a national number like
 `0501234567` to have it parsed.
+
+## Sending a message
+
+`POST /v1/messages` takes an intent, not a channel command: who, which template,
+which purpose. The engine normalises the address, loads the tenant's provider
+config and template, asks `can_send`, and only then renders and queues. A
+refusal is not an error — it is a `messages` row with `status: 'blocked'` and
+the reason, returned with 200, and nothing reaches the queue. A `queued` message
+comes back 202; the pg-boss worker sends it with the tenant's own credentials
+and writes `sent`, and the provider's delivery report moves it to `delivered` or
+`failed`. Every one of those transitions appends to `events`.
+
+Marketing messages must have `unsubscribeText` on the channel config; it is
+appended to the rendered body on its own line, and a send without it is a 422.
+Templates are Liquid, rendered with `strictVariables`, so a missing variable is a
+400 naming it rather than an empty string sent to a real phone.
+
+Provider credentials are AES-256-GCM encrypted before they touch the database,
+with a key the database never sees. Generate one with:
+
+```bash
+openssl rand -hex 32     # this is CREDENTIALS_KEY
+```
+
+`GET /v1/channels/:channel` returns the provider, sender and `configured: true`
+and never the credentials themselves.
+
+## Provider webhooks
+
+Delivery reports arrive at:
+
+```
+POST https://<host>/webhooks/<provider>/<WEBHOOK_TOKEN>
+```
+
+There is no JWT — a provider has none — and SMS providers generally cannot sign
+their callbacks, so the URL itself is the secret. A wrong token gets the same
+404 as an unknown path. Set `WEBHOOK_TOKEN` to something long and random, and
+treat the whole URL as a credential. A body the adapter cannot match is logged
+and answered 202: replying 4xx to a provider makes it retry the same body
+forever.
 
 ## Tenant isolation
 
