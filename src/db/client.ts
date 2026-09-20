@@ -13,7 +13,13 @@ let pool: Sql | undefined;
 
 /** The one connection pool. */
 export function db(): Sql {
-  pool ??= postgres(connectionString(), { max: 10, onnotice: () => {} });
+  pool ??= postgres(connectionString(), {
+    max: 10,
+    onnotice: () => {},
+    // Everything the engine owns lives in `marketing`, so no query names the
+    // schema. `public` stays on the path for extension functions.
+    connection: { search_path: 'marketing, public' },
+  });
   return pool;
 }
 

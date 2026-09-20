@@ -10,8 +10,8 @@ const claims = z.object({ tenant_id: z.string().uuid() });
 let secret: Uint8Array | undefined;
 function jwtSecret(): Uint8Array {
   if (!secret) {
-    const raw = process.env.SUPABASE_JWT_SECRET;
-    if (!raw) throw new Error('SUPABASE_JWT_SECRET is not set');
+    const raw = process.env.JWT_SECRET;
+    if (!raw) throw new Error('JWT_SECRET is not set');
     secret = new TextEncoder().encode(raw);
   }
   return secret;
