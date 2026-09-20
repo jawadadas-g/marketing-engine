@@ -7,14 +7,12 @@ See `docs/ARCHITECTURE.md` for the design and `docs/briefs/` for the steps.
 
 ## Run it locally
 
-You need Node 22 and a Postgres you can write to. Any Postgres will do; a
-throwaway one is a single command:
+You need Node 22 and a Postgres you can write to. Any Postgres will do; the
+bundled compose file brings one up on `127.0.0.1:55432` with the `marketing`
+and `marketing_test` databases already created:
 
 ```bash
-docker run -d --name marketing-pg -e POSTGRES_PASSWORD=postgres \
-  -p 127.0.0.1:55432:5432 postgres:15
-docker exec marketing-pg psql -U postgres \
-  -c 'create database marketing' -c 'create database marketing_test'
+docker compose up -d
 ```
 
 Then, the four commands:
