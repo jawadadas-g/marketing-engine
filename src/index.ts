@@ -2,10 +2,14 @@ import { serve } from '@hono/node-server';
 import { createApp } from './api/app.js';
 import { closeDb } from './db/client.js';
 import { startJobs, stopJobs } from './jobs/index.js';
+import { companyLookup } from './spine/registry/index.js';
 
 const port = Number(process.env.PORT ?? 3000);
 
 await startJobs();
+// Says once whether company enrichment is available, rather than leaving it to
+// be discovered on the first upsert that asked for it.
+companyLookup();
 
 const server = serve({ fetch: createApp().fetch, port }, (info) => {
   console.log(`marketing-engine listening on :${info.port}`);

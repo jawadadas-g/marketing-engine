@@ -52,6 +52,11 @@ never part of `npm test` or CI.
 | `POST /webhooks/:provider/:token` | token in the URL | provider callbacks |
 | `GET /webhooks/whatsapp-meta/:token` | token in the URL | Meta's subscription handshake |
 | `POST`/`GET /unsubscribe/:token` | signed token | one-click opt-out from an email |
+| `POST /v1/companies` | Bearer JWT | add or match a company in the prospect pool |
+| `GET /v1/companies/:id` | Bearer JWT | a company, its identifiers, your view and your sources |
+| `GET /v1/companies?identifier=cr:101…` | Bearer JWT | the same, found by identifier |
+| `PUT /v1/companies/:id/view` | Bearer JWT | your relationship, tags and notes for it |
+| `POST /v1/companies/import` | Bearer JWT | bulk CSV import |
 
 Auth is a Bearer JWT signed HS256 with `JWT_SECRET` and carrying a
 `tenant_id` claim. Anything else is a 401.
@@ -204,6 +209,86 @@ and a spam complaint. The link is
 tenant, channel and address signed with `WEBHOOK_TOKEN` — so there is no table
 behind it and a tampered link is a 404. Following it writes both a suppression
 and a revoked consent, so `can_send` says `suppressed` from then on.
+
+## The company registry
+
+A platform-owned pool of companies that are **not** on the marketplace:
+prospects arriving through an import, an RFQ counterparty, an API call or a
+registrar lookup. One real company is one row whoever contributed it, so
+`companies` and `company_identifiers` are shared across tenants — the only
+tables that are. What a tenant says *about* a company (relationship, tags,
+notes) and which sources it contributed stay private to that tenant.
+
+`registry.upsert` is the only way in, and identity is decided by identifier,
+not by name:
+
+| type | stored as | strength |
+| --- | --- | --- |
+| `cr` | digits only | strong |
+| `vat` | digits only | strong |
+| `domain` | bare host, no scheme, no `www.` | strong |
+| `phone` | E.164 | weak |
+| `email` | lower-cased; also yields its domain | weak |
+
+**Strong** identifiers belong to one company: one match is that company, and
+two records carrying two different companies' strong identifiers mean those
+were always the same company. **Weak** ones link but never merge, because a
+phone number or a shared mailbox moves between businesses; one already pointing
+elsewhere is left where it is and noted on the source row. Free-mail domains
+(`gmail.com` and friends) and `PLATFORM_DOMAIN` are dropped: they identify
+nobody.
+
+Only when no strong identifier matches does the name get a say, and then only
+to **link**, never to merge, at a similarity of 0.90 or better on the
+normalised name. Normalisation folds case, Arabic orthography (tashkeel,
+`أإآ`→`ا`, `ة`→`ه`, `ى`→`ي`) and legal-form words in both languages, so
+`شركة الفلاح للتجارة` and `الفلاح للتجاره` are one name, as are
+`Al-Falah Trading Co. Ltd` and `AL FALAH TRADING`. Below 0.90, genuinely
+different Saudi trading companies collide; looser matching is a search-ranking
+question for discovery, not a claim that two records are the same company.
+
+### Merges are reversible
+
+A merge keeps every row. The oldest company survives; each loser keeps its row
+with `merged_into` pointing at the survivor, and its identifiers, sources,
+message stamps and per-tenant views are moved across. A tenant that knew both
+ends up with one view, tags unioned and notes kept end to end, rather than one
+silently winning. `GET /v1/companies/:id` on a merged-away id returns the
+survivor. To undo one by hand: clear `merged_into`, and the source rows record
+what each contributor said and when. A merge emits `company.merged` naming the
+survivor and the losers.
+
+### CSV import
+
+`POST /v1/companies/import` with `Content-Type: text/csv`, up to 5,000 rows,
+header exactly:
+
+```
+name,country,cr,vat,domain,phone,email,relationship,tags
+```
+
+`tags` are `;`-separated. Each row runs through the same `upsert`, with
+`source.ref` set to `<ref>:<line>` so any row can be traced back. The response
+is `{ rows, created, linked, merged, rejected }`, where `rejected` names the
+line number and why. A row that offered identifiers and had none of them
+survive normalisation is rejected rather than stored, since nothing could ever
+match it.
+
+### Enabling Wathq
+
+Company lookup is off unless `WATHQ_API_KEY` is set (`WATHQ_BASE_URL` overrides
+the host). With it set, `POST /v1/companies` with `"enrich": true` and a `cr`
+identifier asks the registrar first, takes its name over the caller's, and
+writes a second `lookup` source row holding the whole response. Enrichment
+never fails a write: no key, no CR, or a registrar that does not know simply
+stores what it was given.
+
+**The Wathq response mapping is unverified.** Wathq keeps its response schema
+behind the developer portal and answers 401 to an unauthenticated probe, so the
+field names in `wathq.ts` are best guesses and the adapter keeps the entire
+payload in `raw` regardless. Before relying on it, make one real call, look at
+the body, and fix `factsFrom`; the `raw` on any `lookup` source row already
+written is enough to do that retrospectively.
 
 ## Tenant isolation
 
