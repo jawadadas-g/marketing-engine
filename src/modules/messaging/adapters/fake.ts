@@ -1,54 +1,85 @@
-import type {
-  ChannelAdapter,
-  DeliveryReport,
-  SendInput,
-  SendResult,
-  WebhookRequest,
-} from './types.js';
+import type { Channel } from '../../../spine/contacts/normalize.js';
+import type { ChannelAdapter, ProviderEvent, SendInput, SendResult, WebhookRequest } from './types.js';
 
-export type FakeCall = { to: string; body: string; sender: string };
+export type FakeCall = {
+  channel: Channel;
+  to: string;
+  body: string;
+  sender: string;
+  subject?: string | undefined;
+  providerRef?: unknown;
+  variables?: Record<string, unknown> | undefined;
+  unsubscribeUrl?: string | undefined;
+};
 
 const calls: FakeCall[] = [];
-let failure: Error | null = null;
+const failures = new Map<Channel, Error>();
 
-/** Every send the fake adapter has been asked to make, in order. */
-export function fakeCalls(): readonly FakeCall[] {
-  return calls;
+/** Every send the fake adapters have been asked to make, in order. */
+export function fakeCalls(channel?: Channel): readonly FakeCall[] {
+  return channel ? calls.filter((c) => c.channel === channel) : calls;
 }
 
 export function resetFake(): void {
   calls.length = 0;
-  failure = null;
+  failures.clear();
 }
 
-/** Make the next sends throw, to exercise the retry and failure path. */
-export function failFakeSends(error: Error | null): void {
-  failure = error;
+/** Make one channel's sends throw, to watch another channel pick it up. */
+export function failFakeSends(channel: Channel, error: Error | null): void {
+  if (error) failures.set(channel, error);
+  else failures.delete(channel);
 }
 
 /**
- * The adapter CI and local development run against. It never talks to anyone;
- * `send` just records the call and hands back a deterministic id.
+ * The adapter CI and local development run against, one per channel. It never
+ * talks to anyone: send records the call and hands back a deterministic id.
  */
-export const fakeAdapter: ChannelAdapter = {
-  provider: 'fake',
-  channel: 'sms',
+export function fakeAdapterFor(channel: Channel): ChannelAdapter {
+  return {
+    provider: 'fake',
+    channel,
 
-  async send(input: SendInput): Promise<SendResult> {
-    if (failure) throw failure;
-    calls.push({ to: input.to, body: input.body, sender: input.sender });
-    return { providerMessageId: `fake-${input.messageId}`, raw: { ok: true } };
-  },
+    async send(input: SendInput): Promise<SendResult> {
+      const failure = failures.get(channel);
+      if (failure) throw failure;
+      calls.push({
+        channel,
+        to: input.to,
+        body: input.body,
+        sender: input.sender,
+        subject: input.subject,
+        providerRef: input.providerRef,
+        variables: input.variables,
+        unsubscribeUrl: input.unsubscribeUrl,
+      });
+      return { providerMessageId: `fake-${input.messageId}`, raw: { ok: true } };
+    },
 
-  parseWebhook(req: WebhookRequest): DeliveryReport[] {
-    const body = req.body as { id?: unknown; status?: unknown } | null;
-    if (!body || typeof body.id !== 'string' || typeof body.status !== 'string') return [];
-    const status =
-      body.status === 'delivered' || body.status === 'failed' ? body.status : 'unknown';
-    return [{ providerMessageId: body.id, status, raw: body }];
-  },
+    parseWebhook(req: WebhookRequest): ProviderEvent[] {
+      const body = req.body as Record<string, unknown> | null;
+      if (!body || typeof body !== 'object') return [];
 
-  async validateCredentials(config) {
-    return config['token'] === 'bad' ? { ok: false, reason: 'bad token' } : { ok: true };
-  },
-};
+      if (typeof body['from'] === 'string' && typeof body['text'] === 'string') {
+        return [{ kind: 'inbound', address: body['from'], text: body['text'], raw: body }];
+      }
+
+      const id = body['id'];
+      const status = body['status'];
+      if (typeof id !== 'string' || typeof status !== 'string') return [];
+      const known = ['delivered', 'read', 'failed'] as const;
+      return [
+        {
+          kind: 'status',
+          providerMessageId: id,
+          status: known.find((s) => s === status) ?? 'unknown',
+          raw: body,
+        },
+      ];
+    },
+
+    async validateCredentials(config) {
+      return config['token'] === 'bad' ? { ok: false, reason: 'bad token' } : { ok: true };
+    },
+  };
+}

@@ -1,8 +1,8 @@
 import type {
   ChannelAdapter,
   CredentialCheck,
-  DeliveryReport,
   ProviderConfig,
+  ProviderEvent,
   SendInput,
   SendResult,
   WebhookRequest,
@@ -115,7 +115,7 @@ export const taqnyatAdapter: ChannelAdapter = {
   // TODO(step 4): Taqnyat's delivery-report callback is not in their OpenAPI
   // spec, so this is deliberately permissive. Paste a real callback body from
   // the live test into this file and tighten the mapping to match it.
-  parseWebhook(req: WebhookRequest): DeliveryReport[] {
+  parseWebhook(req: WebhookRequest): ProviderEvent[] {
     const body = req.body as Record<string, unknown> | null;
     if (!body || typeof body !== 'object') return [];
 
@@ -123,11 +123,13 @@ export const taqnyatAdapter: ChannelAdapter = {
     const status = body['status'];
     if (id === undefined || id === null || typeof status !== 'string') return [];
 
-    return [{ providerMessageId: String(id), status: mapStatus(status), raw: body }];
+    return [
+      { kind: 'status', providerMessageId: String(id), status: mapStatus(status), raw: body },
+    ];
   },
 };
 
-function mapStatus(status: string): DeliveryReport['status'] {
+function mapStatus(status: string): 'delivered' | 'failed' | 'unknown' {
   switch (status.toLowerCase()) {
     case 'delivered':
       return 'delivered';
