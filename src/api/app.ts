@@ -4,6 +4,7 @@ import { auth, type AuthVars } from './middleware/auth.js';
 import { idempotency } from './middleware/idempotency.js';
 import { companies } from './routes/companies.js';
 import { consent } from './routes/consent.js';
+import { discovery, marketplace } from './routes/discovery.js';
 import { events } from './routes/events.js';
 import { health } from './routes/health.js';
 import { messaging } from './routes/messaging.js';
@@ -29,6 +30,7 @@ export function createApp() {
   app.route('/', health);
   app.route('/', webhooks);
   app.route('/', unsubscribe);
+  app.route('/', marketplace);
 
   app.use('/v1/*', auth);
   app.use('/v1/*', idempotency);
@@ -37,6 +39,7 @@ export function createApp() {
   app.route('/', rules);
   app.route('/', messaging);
   app.route('/', companies);
+  app.route('/', discovery);
 
   return app;
 }

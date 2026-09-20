@@ -15,3 +15,5 @@ process.env.CREDENTIALS_KEY ??=
   '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 process.env.WEBHOOK_TOKEN ??= 'test-webhook-token';
 process.env.PUBLIC_BASE_URL ??= 'https://engine.test';
+process.env.INTERNAL_TOKEN ??= 'test-internal-token';
+process.env.MARKETPLACE_SIGNUP_URL ??= 'https://marketplace.test/signup';

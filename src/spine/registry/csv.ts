@@ -82,7 +82,13 @@ export const IMPORT_HEADER = [
   'tags',
 ] as const;
 
-export type ImportRow = Record<(typeof IMPORT_HEADER)[number], string>;
+/** Profile columns. Optional, but if present they must follow in this order. */
+export const IMPORT_PROFILE_HEADER = ['buys', 'sells', 'sector', 'city'] as const;
+
+export type ImportRow = Record<
+  (typeof IMPORT_HEADER)[number] | (typeof IMPORT_PROFILE_HEADER)[number],
+  string
+>;
 
 export class CsvFormatError extends Error {}
 
@@ -93,17 +99,31 @@ export function readImport(text: string): ImportRow[] {
   if (!header) throw new CsvFormatError('the file is empty');
 
   const given = header.map((h) => h.trim().toLowerCase());
-  if (given.join(',') !== IMPORT_HEADER.join(',')) {
+  const base = IMPORT_HEADER.join(',');
+  const withProfile = [...IMPORT_HEADER, ...IMPORT_PROFILE_HEADER].join(',');
+
+  if (given.join(',') !== base && given.join(',') !== withProfile) {
     throw new CsvFormatError(
-      `header must be exactly: ${IMPORT_HEADER.join(',')} (got: ${given.join(',')})`,
+      `header must be exactly: ${base} (optionally followed by ${IMPORT_PROFILE_HEADER.join(
+        ',',
+      )}) (got: ${given.join(',')})`,
     );
   }
 
+  const columns = [...IMPORT_HEADER, ...IMPORT_PROFILE_HEADER];
   return rows.map((row) => {
     const record = {} as ImportRow;
-    IMPORT_HEADER.forEach((key, i) => {
+    columns.forEach((key, i) => {
       record[key] = (row[i] ?? '').trim();
     });
     return record;
   });
+}
+
+/** `a;b;c` to ['a','b','c']. Empty in, empty out. */
+export function splitList(value: string): string[] {
+  return value
+    .split(';')
+    .map((v) => v.trim())
+    .filter(Boolean);
 }
