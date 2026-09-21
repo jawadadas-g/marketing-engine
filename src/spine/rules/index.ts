@@ -112,6 +112,18 @@ function load(
   `;
 }
 
+/**
+ * Run one json-logic document that is not a row in `rules` — a condition
+ * carried inline on something else, like a promocode's own eligibility. Returns
+ * the raw result; the caller decides what truthy means, since an inline
+ * document is usually a permit condition rather than a deny one.
+ *
+ * Here so json-logic stays behind this folder.
+ */
+export function applyDocument(document: unknown, context: Record<string, unknown>): unknown {
+  return jsonLogic.apply(document as never, context);
+}
+
 /** Rules this tenant may see: platform, region and its own. */
 export async function listForTenant(tx: Tx): Promise<RuleRow[]> {
   return tx<RuleRow[]>`
