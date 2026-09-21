@@ -13,7 +13,8 @@
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.test.json",
     "migrate": "tsx --env-file-if-exists=.env src/db/migrate.ts",
-    "test:live": "vitest run --config vitest.live.config.ts"
+    "test:live": "vitest run --config vitest.live.config.ts",
+    "e2e": "tsx --env-file-if-exists=.env scripts/e2e.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
