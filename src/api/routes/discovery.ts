@@ -1,4 +1,3 @@
-import { timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { withTenant } from '../../db/client.js';
@@ -12,6 +11,7 @@ import {
   type InviteRow,
 } from '../../modules/discovery/index.js';
 import { env } from '../../env.js';
+import { internalTokenMatches } from './internal.js';
 import { CHANNELS } from '../../spine/contacts/normalize.js';
 import type { AuthVars } from '../middleware/auth.js';
 
@@ -149,9 +149,3 @@ marketplace.post('/internal/invites/accept', async (c) => {
     : c.json({ error: result.reason }, 409);
 });
 
-function internalTokenMatches(given: string): boolean {
-  const expected = env().INTERNAL_TOKEN;
-  const a = Buffer.from(given);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
-}

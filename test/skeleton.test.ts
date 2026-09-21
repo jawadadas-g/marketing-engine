@@ -23,10 +23,14 @@ afterAll(teardownDb);
 beforeEach(resetDb);
 
 describe('health', () => {
-  it('returns 200 with the database reachable', async () => {
+  it('returns 200 with the database and the queue reachable', async () => {
     const res = await request('/health');
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, db: true });
+    const body = (await res.json()) as { ok: boolean; db: boolean; boss: string; version: string };
+    expect(body.ok).toBe(true);
+    expect(body.db).toBe(true);
+    expect(body.boss).toMatch(/running|unavailable/);
+    expect(body.version).toBeTruthy();
   });
 });
 

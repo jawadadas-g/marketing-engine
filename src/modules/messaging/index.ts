@@ -14,6 +14,9 @@ export { addressFor } from './selection.js';
 
 export const SEND_JOB = 'message.send';
 
+/** Three provider attempts before a message is failed and falls back. */
+export const SEND_RETRY_LIMIT = 3;
+
 export type ChannelConfigRow = {
   id: string;
   tenant_id: string;
@@ -342,7 +345,10 @@ export async function send(
     },
   });
 
-  await enqueue(tx, SEND_JOB, { messageId: row.id });
+  await enqueue(tx, SEND_JOB, { messageId: row.id }, {
+    retryLimit: SEND_RETRY_LIMIT,
+    retryBackoff: true,
+  });
 
   return row;
 }
