@@ -4,7 +4,9 @@ As of 2026-09-20.
 
 ## Purpose and the one rule
 
-The marketing engine is one standalone service that finds counterparties, sends messages and runs promocodes for its tenants. It owns no screens; clients (first among them the marketplace UI) call its API.
+The marketing engine is one standalone service that finds counterparties, sends messages and runs promocodes for its tenants. Clients (first among them the marketplace UI) call its API.
+
+The engine service serves only JSON. An operator dashboard lives in `dashboard/` as a separate static app that talks only to the `/internal/` API and deploys as its own container; deleting it changes nothing in the engine.
 
 The rule is keep it simple. Every choice below is the smallest thing that works today and can grow later without a rewrite. If a section here feels heavier than that, cut it.
 

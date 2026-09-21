@@ -3,7 +3,9 @@
 Read `docs/ARCHITECTURE.md` before doing anything. It is the source of truth. If a task conflicts with it, stop and say so instead of improvising.
 
 ## What this is
-A standalone, multi-tenant marketing engine: messaging (SMS, email, WhatsApp, Telegram), company discovery, promocodes. One Node service, one Postgres (Supabase), one HTTP API. No screens.
+A standalone, multi-tenant marketing engine: messaging (SMS, email, WhatsApp, Telegram), company discovery, promocodes. One Node service, one Postgres (Supabase), one HTTP API.
+
+The engine service serves only JSON. An operator dashboard lives in `dashboard/` as a separate static app that talks only to the `/internal/` API and deploys as its own container; deleting it changes nothing in the engine.
 
 ## Rules (non-negotiable)
 1. Keep it simple. The smallest thing that works. If you are about to add a dependency, abstraction or config option the current step does not need, don't.
@@ -14,6 +16,7 @@ A standalone, multi-tenant marketing engine: messaging (SMS, email, WhatsApp, Te
 6. Every module appends to `events`. Nothing else is the source of truth for "what happened".
 7. Standalone and generic. A tenant is any organisation; a contact is any phone/email/handle. Marketplace- and country-specific things are adapters, connectors or rule rows, never hardcoded.
 8. Extension only through: a new adapter file, a new ingest connector, a new rule kind, or reading the event log. If a feature needs a fifth mechanism, stop and ask.
+9. The dashboard renders; the engine decides. No business logic, no derived counts, no status inference in the UI. If a number isn't in an API response, add it to the API in a separate brief, not in the browser.
 
 ## Stack (do not add to this without asking)
 TypeScript, Node 22, Hono, Zod, `postgres` (porsager) or `pg`, pg-boss, json-logic-js, liquidjs, nodemailer, libphonenumber-js, jose. Vitest for tests. Plain `fetch` for every external HTTP API. No ORM.
@@ -38,6 +41,13 @@ src/
 test/
 docs/
   briefs/         one brief per roadmap step
+
+dashboard/        the operator screen: a separate static app, its own container
+  src/
+    api.ts        typed fetch wrappers over /internal/
+    ui/           table, card, filters, pager, timestamp, money, svg charts
+    views/        one folder per view
+  Dockerfile      nginx:alpine, basic auth, proxies /api/ to the engine
 ```
 
 ## Working agreement
