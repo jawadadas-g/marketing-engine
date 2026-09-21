@@ -13,6 +13,7 @@ import { promocodes } from './routes/promocodes.js';
 import { rules } from './routes/rules.js';
 import { unsubscribe } from './routes/unsubscribe.js';
 import { internal } from './routes/internal.js';
+import { operator } from './routes/operator/index.js';
 import { webhookEndpoints } from './routes/webhook-endpoints.js';
 import { webhooks } from './routes/webhooks.js';
 import { InvalidAddressError } from '../spine/contacts/normalize.js';
@@ -46,6 +47,7 @@ export function createApp() {
   app.route('/', unsubscribe);
   app.route('/', marketplace);
   app.route('/', internal);
+  app.route('/', operator);
 
   app.use('/v1/*', auth);
   app.use('/v1/*', idempotency);
