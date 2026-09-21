@@ -1,4 +1,5 @@
 import type { Tx } from '../../db/client.js';
+import { enqueue, queueStarted } from '../../jobs/queue.js';
 
 export type EventRow = {
   id: string;
@@ -36,8 +37,22 @@ export async function emit(tx: Tx, input: EmitInput): Promise<EventRow> {
     returning *
   `;
   if (!row) throw new Error('events.emit inserted no row');
+
+  // Fan the event out to whoever is listening, on this same transaction: an
+  // event that commits always fans out, and one that rolls back never does.
+  // Nothing about the outcome of a delivery comes back here.
+  if (queueStarted()) {
+    await enqueue(tx, FANOUT_JOB, { eventId: String(row.id) });
+  }
+
   return row;
 }
+
+/**
+ * Named here rather than imported from the webhooks module, which imports this
+ * one. The queue is a string either way.
+ */
+const FANOUT_JOB = 'webhook.fanout';
 
 export type ListInput = {
   tenantId: string;

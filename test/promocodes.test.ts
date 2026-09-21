@@ -8,6 +8,7 @@ import {
   reserve,
   type Reconciliation,
 } from '../src/modules/promocodes/index.js';
+import { resetEnv } from '../src/env.js';
 import { TENANT_A, TENANT_B, resetDb, startQueue, teardownDb, tokenFor } from './helpers.js';
 
 const app = createApp();
@@ -29,6 +30,16 @@ function request(path: string, init: RequestInit = {}, token: string | null = to
 
 const json = (body: unknown) => ({
   headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+});
+
+/** The money routes require a key; a fresh one per call unless a test reuses it. */
+let keyCounter = 0;
+const paid = (body: unknown, key?: string) => ({
+  headers: {
+    'Content-Type': 'application/json',
+    'Idempotency-Key': key ?? `key-${(keyCounter += 1)}`,
+  },
   body: JSON.stringify(body),
 });
 
@@ -87,7 +98,7 @@ async function reserveOrder(
 ): Promise<{ status: number; body: { redemption?: Redemption; reason?: string } }> {
   const res = await request('/v1/redemptions', {
     method: 'POST',
-    ...json({ code: 'SAVE10', buyerRef: 'buyer-1', cart: cart(subtotal), orderRef, ...extra }),
+    ...paid({ code: 'SAVE10', buyerRef: 'buyer-1', cart: cart(subtotal), orderRef, ...extra }),
   });
   return { status: res.status, body: (await res.json()) as never };
 }
@@ -117,12 +128,14 @@ beforeAll(async () => {
 
 afterAll(async () => {
   process.env.LEDGER = 'internal';
+  resetEnv();
   await teardownDb();
 });
 
 beforeEach(async () => {
   await resetDb();
   process.env.LEDGER = 'internal';
+  resetEnv();
 });
 
 describe('validate', () => {
@@ -176,7 +189,7 @@ describe('reserve, settle, release', () => {
 
     const res = await request(`/v1/redemptions/${body.redemption!.id}/settle`, {
       method: 'POST',
-      ...json({}),
+      ...paid({}),
     });
     expect(res.status).toBe(200);
 
@@ -194,7 +207,7 @@ describe('reserve, settle, release', () => {
 
     const res = await request(`/v1/redemptions/${body.redemption!.id}/release`, {
       method: 'POST',
-      ...json({ reason: 'cancelled' }),
+      ...paid({ reason: 'cancelled' }),
     });
     expect(res.status).toBe(200);
     expect(((await res.json()) as { redemption: Redemption }).redemption.status).toBe('released');
@@ -212,7 +225,7 @@ describe('reserve, settle, release', () => {
 
     const res = await request(`/v1/redemptions/${body.redemption!.id}/settle`, {
       method: 'POST',
-      ...json({ finalDiscountAmount: 2500 }),
+      ...paid({ finalDiscountAmount: 2500 }),
     });
     expect(res.status).toBe(200);
 
@@ -240,22 +253,22 @@ describe('reserve, settle, release', () => {
     const a = await reserveOrder('order-1');
     await request(`/v1/redemptions/${a.body.redemption!.id}/release`, {
       method: 'POST',
-      ...json({ reason: 'cancelled' }),
+      ...paid({ reason: 'cancelled' }),
     });
     const settleReleased = await request(`/v1/redemptions/${a.body.redemption!.id}/settle`, {
       method: 'POST',
-      ...json({}),
+      ...paid({}),
     });
     expect(settleReleased.status).toBe(409);
 
     const b = await reserveOrder('order-2');
     await request(`/v1/redemptions/${b.body.redemption!.id}/settle`, {
       method: 'POST',
-      ...json({}),
+      ...paid({}),
     });
     const releaseSettled = await request(`/v1/redemptions/${b.body.redemption!.id}/release`, {
       method: 'POST',
-      ...json({ reason: 'too late' }),
+      ...paid({ reason: 'too late' }),
     });
     expect(releaseSettled.status).toBe(409);
   });
@@ -417,7 +430,7 @@ describe('rounding', () => {
 
     const res = await request('/v1/redemptions', {
       method: 'POST',
-      ...json({
+      ...paid({
         code: 'THIRDS',
         buyerRef: 'buyer-1',
         cart: cart(80000),
@@ -436,10 +449,11 @@ describe('ledger selection', () => {
   it('fails loudly and writes nothing when the finance engine is not configured', async () => {
     await createCode();
     process.env.LEDGER = 'finance-engine';
+    resetEnv();
 
     const res = await request('/v1/redemptions', {
       method: 'POST',
-      ...json({ code: 'SAVE10', buyerRef: 'buyer-1', cart: cart(80000), orderRef: 'order-1' }),
+      ...paid({ code: 'SAVE10', buyerRef: 'buyer-1', cart: cart(80000), orderRef: 'order-1' }),
     });
     expect(res.status).toBe(500);
 

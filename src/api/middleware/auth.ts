@@ -2,6 +2,7 @@ import { createMiddleware } from 'hono/factory';
 import { HTTPException } from 'hono/http-exception';
 import { jwtVerify } from 'jose';
 import { z } from 'zod';
+import { env } from '../../env.js';
 
 export type AuthVars = { Variables: { tenantId: string } };
 
@@ -10,9 +11,7 @@ const claims = z.object({ tenant_id: z.string().uuid() });
 let secret: Uint8Array | undefined;
 function jwtSecret(): Uint8Array {
   if (!secret) {
-    const raw = process.env.JWT_SECRET;
-    if (!raw) throw new Error('JWT_SECRET is not set');
-    secret = new TextEncoder().encode(raw);
+    secret = new TextEncoder().encode(env().JWT_SECRET);
   }
   return secret;
 }

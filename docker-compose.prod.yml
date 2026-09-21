@@ -1,0 +1,50 @@
+# Production shape: the service, its database, and something that takes a copy
+# of the database every night. Nothing else runs as a service.
+services:
+  engine:
+    build: .
+    image: marketing-engine:latest
+    restart: always
+    env_file: .env.prod
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/marketing
+    ports:
+      - '127.0.0.1:3000:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: marketing
+    volumes:
+      - engine_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backup:
+    image: postgres:16
+    restart: always
+    environment:
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: marketing
+      KEEP_DAYS: '14'
+    volumes:
+      - engine_backups:/backups
+      - ./docker/backup.sh:/usr/local/bin/backup.sh:ro
+    entrypoint: ['/usr/local/bin/backup.sh']
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  engine_pg_data:
+  engine_backups:

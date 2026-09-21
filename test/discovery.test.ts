@@ -4,6 +4,7 @@ import { db, withTenant } from '../src/db/client.js';
 import { resetFake } from '../src/modules/messaging/adapters/fake.js';
 import { registerFinder, type Finder } from '../src/modules/discovery/index.js';
 import { setCompanyLookup } from '../src/spine/registry/index.js';
+import { resetEnv } from '../src/env.js';
 import { TENANT_A, TENANT_B, resetDb, startQueue, teardownDb, tokenFor } from './helpers.js';
 
 const app = createApp();
@@ -94,6 +95,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   process.env.FINDER = 'basic';
+  resetEnv();
   setCompanyLookup(undefined);
   await teardownDb();
 });
@@ -103,6 +105,7 @@ beforeEach(async () => {
   resetFake();
   setCompanyLookup(null);
   process.env.FINDER = 'basic';
+  resetEnv();
 });
 
 describe('search', () => {
@@ -172,6 +175,7 @@ describe('search', () => {
     pinned = riyadhLpg.id;
 
     process.env.FINDER = 'test';
+    resetEnv();
     const result = await search({ buys: ['diesel'], city: 'Riyadh' });
 
     expect(result.finder).toBe('test');

@@ -1,11 +1,10 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { env } from '../../env.js';
 
 export type UnsubscribeClaim = { tenantId: string; channel: string; address: string };
 
 function key(): string {
-  const secret = process.env.WEBHOOK_TOKEN;
-  if (!secret) throw new Error('WEBHOOK_TOKEN is not set');
-  return secret;
+  return env().WEBHOOK_TOKEN;
 }
 
 function sign(claim: UnsubscribeClaim): string {
@@ -45,6 +44,6 @@ export function verifyUnsubscribeToken(token: string): UnsubscribeClaim | null {
 }
 
 export function unsubscribeUrlFor(tenantId: string, channel: string, address: string): string {
-  const base = (process.env.PUBLIC_BASE_URL ?? '').replace(/\/+$/, '');
+  const base = env().PUBLIC_BASE_URL.replace(/\/+$/, '');
   return `${base}/unsubscribe/${unsubscribeToken({ tenantId, channel, address })}`;
 }

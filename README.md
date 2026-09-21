@@ -410,6 +410,58 @@ the `rules` table **denies** when it matches, like every other rule kind. Both
 run on every validate, platform first, so a platform rule cannot be lifted by a
 code.
 
+## Running it in production
+
+`docker-compose.prod.yml` runs three things: the engine, its Postgres, and a
+container that dumps the database every night. Put the environment in
+`.env.prod` (see `.env.example`) and set `POSTGRES_PASSWORD`:
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+The image runs as the `node` user, applies migrations before taking traffic
+(they are forward-only and idempotent, so a restart or a second replica is
+harmless) and carries a `HEALTHCHECK` on `/health`. Shutdown is graceful: the
+server stops accepting requests, in-flight ones finish, and pg-boss is told to
+stop cleanly — whatever it does not finish stays on the queue for the next
+process, so no send is lost.
+
+### Backups, and restoring from one
+
+The `backup` container writes `marketing-<timestamp>.dump` to the `engine_backups`
+volume once a day, covering the `marketing` and `pgboss` schemas, and deletes
+dumps older than 14 days *after* a successful write, so a run of failures never
+eats the last good one.
+
+To restore one — these are the commands, run as written against a real dump:
+
+```bash
+# 1. Find the dump you want.
+docker compose -f docker-compose.prod.yml exec backup ls -l /backups
+
+# 2. Create the target database AND the pg_trgm extension. The dump covers the
+#    marketing and pgboss schemas only, so the extension is not in it; without
+#    this step the trigram index on company names is silently skipped and
+#    free-text discovery comes back broken rather than missing.
+docker compose -f docker-compose.prod.yml exec postgres \
+  psql -U postgres -c 'create database marketing_restored'
+docker compose -f docker-compose.prod.yml exec postgres \
+  psql -U postgres -d marketing_restored -c 'create extension if not exists pg_trgm'
+
+# 3. Load it.
+docker compose -f docker-compose.prod.yml exec postgres \
+  pg_restore -U postgres -d marketing_restored --no-owner --role=postgres \
+  /backups/marketing-<timestamp>.dump
+
+# 4. Check it came back whole.
+docker compose -f docker-compose.prod.yml exec postgres psql -U postgres \
+  -d marketing_restored -c "select count(*) from marketing.events"
+```
+
+A restore done this way reports zero errors. Point `DATABASE_URL` at the
+restored database to cut over.
+
 ## Tenant isolation
 
 Every tenant table has `tenant_id` and row-level security. Requests run inside

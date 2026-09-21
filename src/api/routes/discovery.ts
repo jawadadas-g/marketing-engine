@@ -1,4 +1,3 @@
-import { timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { withTenant } from '../../db/client.js';
@@ -11,6 +10,8 @@ import {
   setProfile,
   type InviteRow,
 } from '../../modules/discovery/index.js';
+import { env } from '../../env.js';
+import { internalTokenMatches } from './internal.js';
 import { CHANNELS } from '../../spine/contacts/normalize.js';
 import type { AuthVars } from '../middleware/auth.js';
 
@@ -125,13 +126,7 @@ marketplace.get('/i/:token', async (c) => {
     return c.text('This invitation has expired or has already been used.', 410);
   }
 
-  const signup = process.env.MARKETPLACE_SIGNUP_URL;
-  if (!signup) {
-    console.error('MARKETPLACE_SIGNUP_URL is not set; cannot complete an invite');
-    return c.text('This invitation cannot be completed right now.', 503);
-  }
-
-  const url = new URL(signup);
+  const url = new URL(env().MARKETPLACE_SIGNUP_URL);
   url.searchParams.set('invite', row.token);
   return c.redirect(url.toString(), 302);
 });
@@ -154,10 +149,3 @@ marketplace.post('/internal/invites/accept', async (c) => {
     : c.json({ error: result.reason }, 409);
 });
 
-function internalTokenMatches(given: string): boolean {
-  const expected = process.env.INTERNAL_TOKEN ?? '';
-  if (!expected) return false;
-  const a = Buffer.from(given);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
