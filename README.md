@@ -63,6 +63,14 @@ never part of `npm test` or CI.
 | `GET /v1/invites/:id` | Bearer JWT | one of your invites |
 | `GET /i/:token` | public | the invite link; redirects to signup |
 | `POST /internal/invites/accept` | `X-Internal-Token` | the marketplace reporting a signup |
+| `POST`/`GET /v1/promocodes` | Bearer JWT | create a code; list with usage |
+| `GET`/`PATCH /v1/promocodes/:id` | Bearer JWT | one code; pause or end it |
+| `POST /v1/promocodes/validate` | Bearer JWT | what is this code worth on this cart? |
+| `GET /v1/promocodes/reconcile` | Bearer JWT | does spend equal settlement? |
+| `POST /v1/redemptions` | Bearer JWT | reserve the discount for an order |
+| `POST /v1/redemptions/:id/settle` | Bearer JWT | the order completed |
+| `POST /v1/redemptions/:id/release` | Bearer JWT | the order went away |
+| `GET /v1/redemptions/:id`, `?orderRef=` | Bearer JWT | one redemption |
 
 Auth is a Bearer JWT signed HS256 with `JWT_SECRET` and carrying a
 `tenant_id` claim. Anything else is a 401.
@@ -342,6 +350,65 @@ The marketplace implements three steps:
    under the inviting tenant. A second accept is a 409.
 
 From then on the company is out of the prospect pool's results.
+
+## Promocodes
+
+**Every amount is an integer in the currency's minor unit** — halalas for SAR,
+never riyals and never a float. **A percent discount's `value` is basis
+points**: `1000` is 10%. A computed discount is rounded down, capped by
+`maxDiscount` and by the cart itself.
+
+The engine never moves money. It records who owes what against a `Ledger`, and
+settlement between the parties is somebody else's job. `LEDGER=internal` (the
+default) keeps that in a table here; `finance-engine` is a stub that fails
+loudly until its endpoints exist.
+
+### The checkout handshake
+
+Four calls, in this order:
+
+1. **Validate at the cart.** `POST /v1/promocodes/validate` while the buyer is
+   still typing. An unusable code is a 200 with a `reason`, not an error —
+   `not_found`, `not_active`, `currency_mismatch`, `min_subtotal`, `rule`,
+   `budget_uses`, `budget_buyer` or `budget_spend`, whichever is true first.
+   Nothing is written.
+2. **Reserve at order placed.** `POST /v1/redemptions` with an `orderRef`. This
+   locks the code, re-checks everything, writes a `reserved` redemption and
+   places one hold per funder. `orderRef` is the idempotency key: the same
+   order twice gets the same redemption and one set of holds, so a retried
+   checkout cannot double-spend a budget.
+3. **Settle at order completed.** `POST /v1/redemptions/:id/settle`, optionally
+   with a `finalDiscountAmount` lower than reserved if the order shrank. What
+   was used is captured; what was reserved and not used is released, so no hold
+   is left open against a finished order.
+4. **Release on cancel.** `POST /v1/redemptions/:id/release` with a reason.
+   Reservations nobody settles or releases are let go automatically once
+   `RESERVATION_TTL_MINUTES` has passed, by a job running every five minutes —
+   otherwise an abandoned cart would hold budget against every other buyer
+   forever.
+
+Settling a released redemption, or releasing a settled one, is a 409. A refund
+after settlement is a marketplace matter, not a promocode one.
+
+`GET /v1/promocodes/reconcile` is the check that all of this held: per
+currency, what the redemptions say was settled must equal what the ledger
+captured, and what they say is still reserved must equal what it is still
+holding.
+
+### Funders
+
+`funders` is `[{ party, share }]` with shares summing to 1, where a party is
+`platform` or `tenant:<uuid>`. A discount that does not divide evenly puts the
+remainder on the first funder, so the parts always sum to exactly the discount
+— 1000 split three ways is 334, 333, 333.
+
+### Two kinds of rule, opposite senses
+
+Watch this one. A code's own `rules` document says when the code **may** be
+used, so anything but `true` refuses it. A platform `promo_eligibility` row in
+the `rules` table **denies** when it matches, like every other rule kind. Both
+run on every validate, platform first, so a platform rule cannot be lifted by a
+code.
 
 ## Tenant isolation
 
