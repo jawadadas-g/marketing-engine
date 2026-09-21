@@ -22,10 +22,14 @@ export async function resetDb(): Promise<void> {
              messages, templates, tenant_channel_configs,
              tenant_company, company_sources, company_identifiers,
              company_profiles, invites, finder_runs, companies,
-             ledger_entries, redemptions, promocodes
+             ledger_entries, redemptions, promocodes,
+             webhook_deliveries, webhook_endpoints
              restart identity cascade
   `;
   await clearSendJobs();
+  // Tenants a test provisioned through the internal route go too, or the next
+  // run finds them already there.
+  await db()`delete from tenants where id <> ${TENANT_A} and id <> ${TENANT_B}`;
   await db()`
     insert into tenants (id, name) values
       (${TENANT_A}, 'Tenant A'),
