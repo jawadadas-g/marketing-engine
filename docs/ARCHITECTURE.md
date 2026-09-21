@@ -164,4 +164,6 @@ Eight steps, in order, each one brief and one pull request. Nothing starts until
 
 Step 3 is the proving step: it exercises consent, rules, queue, an adapter and the event log together on raw contacts. After step 4 the messaging service is complete and standalone; anything that can call an API and hold provider credentials can use it. Discovery and promocodes are added on the same spine afterwards.
 
-After step 8 the engine is in production and everything in "Not in v1" becomes a candidate, one at a time, only when a tenant asks. `docs/V1.md` is the one-page account of what shipped, what it deliberately does not do, and where it is thin.
+| 9. Operator read API. Done 2026-09-21 | Platform-scope reads across every tenant: overview, feeds, pg-boss jobs and schedules, webhook deliveries, metrics, and a LISTEN/NOTIFY event stream over SSE; retry a failed job and replay a failed delivery | An operator dashboard answers what is queued, what each tenant sent and what failed, live, from the API alone |
+
+After step 8 the engine is in production and everything in "Not in v1" becomes a candidate, one at a time, only when a tenant asks. `docs/V1.md` is the one-page account of what shipped, what it deliberately does not do, and where it is thin. Step 9 follows it: the operator read side the marketplace admin needs, which adds no domain behaviour and is described in `docs/DASHBOARD.md`.

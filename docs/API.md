@@ -589,6 +589,113 @@ Both use `{PUBLIC_BASE_URL}/webhooks/<provider>/<WEBHOOK_TOKEN>`.
 
 ---
 
+## Operator routes — internal token
+
+The platform read side, across every tenant. `docs/DASHBOARD.md` is the guide
+for building against these; this is the reference.
+
+All of them take `X-Internal-Token`. A tenant JWT is a 401. Lists take `limit`
+(1..500, default 100) and `cursor` (the last row's `id`) and return
+`{ items, nextCursor }`, newest first. Windows are `since`/`until`, or
+`window=1h|24h|7d|30d`.
+
+### `GET /internal/overview?window=24h`
+
+Everything a dashboard's front page needs, in one call:
+
+```json
+{
+  "asOf": "…", "window": { "since": "…", "until": "…" },
+  "health": { "db": true, "boss": "running (3 queued)", "version": "0.1.0" },
+  "queue": [{ "name": "message.send", "created": 3, "active": 1, "retry": 2,
+              "failed": 0, "cancelled": 0, "completedInWindow": 412 }],
+  "messages": { "queued": 3, "sent": 200, "delivered": 180, "read": 40, "failed": 4, "blocked": 12 },
+  "blockedReasons": { "no_consent": 9, "suppressed": 1, "rule:sa-marketing-sms-hours": 2 },
+  "tenants": [{ "tenantId": "…", "tenantName": "…", "messages": {…},
+                "invites": { "sent": 5, "accepted": 1 },
+                "redemptions": { "reserved": 2, "settled": 9, "released": 1 },
+                "webhookFailures": 0 }],
+  "webhooks": { "pending": 1, "failed": 2 },
+  "reservations": { "open": 2, "expiringWithin15m": 1 },
+  "discovery": { "searches": 33, "invitesFromSearch": 4 }
+}
+```
+
+`blockedReasons` counts the reason *per channel* from the `message.blocked`
+event payload, not the `blocked_reason` column — that column says `no_channel`
+for almost every block and would tell you nothing.
+
+`queue` comes from pg-boss's own tables; `completedInWindow` reads its archive
+too, because finished jobs move there.
+
+### `GET /internal/tenants` · `GET /internal/tenants/:id`
+
+The list carries each tenant's 24-hour counts. The detail adds channels
+(redacted), template names, rule counts by kind, webhook endpoints (never the
+secret) and counts over 24h, 7d and 30d.
+
+### Feeds
+
+| Route | Filters |
+| --- | --- |
+| `GET /internal/events` | `tenantId`, `type` (trailing `*` is a prefix), `subjectType`, `subjectId` |
+| `GET /internal/events/:id` | one event with its full payload |
+| `GET /internal/messages` | `tenantId`, `status`, `channel`, `provider`, `companyId`, `address` |
+| `GET /internal/messages/:id` | the message, its events, delivery reports with raw provider bodies, fallback children and parent |
+| `GET /internal/redemptions` | `tenantId`, `status`, `promocodeId` |
+| `GET /internal/invites` | `tenantId`, `status` |
+| `GET /internal/companies` | `q` (trigram on the normalised name), `country`, `onPlatform` |
+| `GET /internal/webhook-deliveries` | `status`, `tenantId`, `endpointId` |
+
+Each message row carries a `timeline` of its own events in order, so a list
+answers "what happened to this?" without opening it.
+
+### Queue
+
+- `GET /internal/jobs?name&state` → pg-boss rows: `id`, `name`, `state`,
+  `retryCount`, `retryLimit`, `data`, `output`, `createdOn`, `startedOn`,
+  `completedOn`, plus `tenantId`/`tenantName` when the job's data names a
+  message or delivery.
+- `GET /internal/jobs/:id` → one job.
+- `POST /internal/jobs/:id/retry` → `200 { "retried": id }` for a `failed` job,
+  `409` for any other state, `404` if unknown.
+- `GET /internal/schedules` → the crons with `cron`, `timezone`, `data`, and
+  when each last completed with what outcome.
+
+### Actions
+
+- `POST /internal/webhook-deliveries/:id/replay` → `202`, any tenant including
+  the platform endpoint.
+
+### `GET /internal/metrics`
+
+`series=messages|events|redemptions|searches`, `bucket=hour|day`, optional
+`tenantId` and `groupBy` (`status`/`channel` for messages, `status` for
+redemptions, `type` for events).
+
+→ `{ bucket, series: [{ key, points: [["2026-09-21T10:00:00Z", 12], …] }] }`
+
+### `GET /internal/stream`
+
+Server-Sent Events, one frame per event as it commits. Optional `tenantId` and
+`type` (trailing `*` is a prefix).
+
+```
+id: 48213
+event: message.sent
+data: {"id":"48213","type":"message.sent","tenantId":"…","subjectType":"message", …}
+```
+
+Send `Last-Event-ID` on reconnect and the engine replays what you missed (up to
+1000 rows) before going live. A heartbeat comment arrives every 15 seconds. At
+most 20 concurrent streams; the 21st gets `503 too_many_streams`. The payload
+is small by design — `GET /internal/events/:id` has the rest.
+
+Events reach the stream only when their transaction commits, so nothing you see
+here was later rolled back.
+
+---
+
 ## Event types
 
 `tenant.created` · `channel.configured` · `template.saved` · `consent.granted` ·
