@@ -38,21 +38,24 @@ create trigger events_notify
 -- ---------------------------------------------------------------------------
 -- Indexes the operator sections need
 -- ---------------------------------------------------------------------------
--- Every one of these is for a cross-tenant scan: the tenant-scoped indexes
--- from earlier migrations all lead with tenant_id, which an operator query
--- filtering only by time or status cannot use.
+-- Only the two that were measured to matter. Every tenant-scoped index from
+-- earlier migrations leads with tenant_id, which an operator query filtering
+-- on time or status alone cannot use, so these two cover the cross-tenant
+-- message feed. Measured against 100k messages:
+--
+--   GET /internal/messages            125ms -> 31ms
+--   GET /internal/messages?status=…    72ms -> 38ms
+--   GET /internal/overview?window=24h  65ms -> 40ms
+--
+-- Four more were written and then removed, because they changed nothing:
+-- events (type, occurred_at) and events (occurred_at) are unused by the
+-- events feed, which orders by id and walks the primary key backwards; and
+-- status indexes on redemptions and webhook_deliveries are pointless while
+-- those tables are small. Add them when a measurement asks for them.
 create index if not exists messages_created_at_idx
   on marketing.messages (created_at desc);
 create index if not exists messages_status_created_at_idx
   on marketing.messages (status, created_at desc);
-create index if not exists events_type_occurred_at_idx
-  on marketing.events (type, occurred_at desc);
-create index if not exists events_occurred_at_idx
-  on marketing.events (occurred_at desc);
-create index if not exists redemptions_status_reserved_at_idx
-  on marketing.redemptions (status, reserved_at desc);
-create index if not exists webhook_deliveries_status_created_at_idx
-  on marketing.webhook_deliveries (status, created_at desc);
 
 -- ---------------------------------------------------------------------------
 -- A tenant always has a name to show

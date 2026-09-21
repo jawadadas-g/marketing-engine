@@ -18,11 +18,16 @@ export async function overview(window: Window) {
         where created_at >= ${window.since} and created_at < ${window.until}
         group by status
       `),
+      // Not messages.blocked_reason: since channel selection that column says
+      // `no_channel` for almost every block, which tells an operator nothing.
+      // The reason per channel — no_consent, suppressed, rule:<name> — is in
+      // the message.blocked event's payload, which is what is worth counting.
       countsBy(sql`
-        select blocked_reason as key, count(*)::text as n from messages
-        where status = 'blocked' and blocked_reason is not null
-          and created_at >= ${window.since} and created_at < ${window.until}
-        group by blocked_reason
+        select reason as key, count(*)::text as n
+        from events e, jsonb_each_text(coalesce(e.payload -> 'channels', '{}'::jsonb)) as r(channel, reason)
+        where e.type = 'message.blocked'
+          and e.occurred_at >= ${window.since} and e.occurred_at < ${window.until}
+        group by reason
       `),
       tenantSection(window),
       countsBy(sql`
