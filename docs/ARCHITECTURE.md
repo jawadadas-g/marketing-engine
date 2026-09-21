@@ -168,4 +168,6 @@ Step 3 is the proving step: it exercises consent, rules, queue, an adapter and t
 
 | 9. Operator read API. Done 2026-09-21 | Platform-scope reads across every tenant: overview, feeds, pg-boss jobs and schedules, webhook deliveries, metrics, and a LISTEN/NOTIFY event stream over SSE; retry a failed job and replay a failed delivery | An operator dashboard answers what is queued, what each tenant sent and what failed, live, from the API alone |
 
+| 10. Operator dashboard. Done 2026-09-21 | `dashboard/`: a Preact static app served by nginx with basic auth, proxying `/api/` to `/internal/` and adding the token server-side; eight views, hand-built SVG charts, no UI kit | An operator opens a screen and sees the queue, every tenant's traffic, the live feed, and can retry a job or replay a delivery |
+
 After step 8 the engine is in production and everything in "Not in v1" becomes a candidate, one at a time, only when a tenant asks. `docs/V1.md` is the one-page account of what shipped, what it deliberately does not do, and where it is thin. Step 9 follows it: the operator read side the marketplace admin needs, which adds no domain behaviour and is described in `docs/DASHBOARD.md`.

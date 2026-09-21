@@ -1,0 +1,51 @@
+# Rendered by envsubst at container start, so ${INTERNAL_TOKEN} and
+# ${ENGINE_URL} come from the environment and never from the image.
+
+server {
+  listen 8080;
+  server_name _;
+
+  root /usr/share/nginx/html;
+  index index.html;
+
+  # Everything, including the static files, is behind basic auth. The htpasswd
+  # file is mounted at runtime; there is never one in the image or the repo.
+  auth_basic "marketing engine — operator";
+  auth_basic_user_file /etc/nginx/htpasswd;
+
+  # default-src 'self' is enough because the app loads nothing from anywhere
+  # else: no CDN, no font service, no analytics.
+  add_header Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'" always;
+  add_header X-Frame-Options "DENY" always;
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header Referrer-Policy "no-referrer" always;
+
+  # SSE: no buffering, no early timeout, or the live feed arrives in lumps or
+  # not at all.
+  location /api/stream {
+    proxy_pass ${ENGINE_URL}/internal/stream;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header X-Internal-Token "${INTERNAL_TOKEN}";
+    # The operator's basic-auth credentials stop here. The engine authenticates
+    # the token, and has no business seeing a browser's password.
+    proxy_set_header Authorization "";
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;
+    chunked_transfer_encoding on;
+  }
+
+  location /api/ {
+    proxy_pass ${ENGINE_URL}/internal/;
+    proxy_http_version 1.1;
+    proxy_set_header X-Internal-Token "${INTERNAL_TOKEN}";
+    proxy_set_header Authorization "";
+    proxy_set_header Host $host;
+  }
+
+  # A hash router serves one document for every route.
+  location / {
+    try_files $uri $uri/ /index.html;
+  }
+}

@@ -462,6 +462,57 @@ docker compose -f docker-compose.prod.yml exec postgres psql -U postgres \
 A restore done this way reports zero errors. Point `DATABASE_URL` at the
 restored database to cut over.
 
+## The operator dashboard
+
+A screen for whoever runs this: the queue, every tenant's traffic, a live event
+feed, and the two actions worth having (retry a failed job, replay a failed
+delivery). It lives in `dashboard/` as a **separate static app** with its own
+container. The engine still serves only JSON; deleting `dashboard/` changes
+nothing in it.
+
+### Running it locally
+
+```bash
+cd dashboard
+npm install
+cp .env.local.example .env.local   # point ENGINE_URL at your engine
+npm run dev                        # http://localhost:5173
+```
+
+The dev server proxies `/api/` to the engine's `/internal/` and adds
+`X-Internal-Token` itself, so **the token never reaches the browser or the
+bundle**. There is no basic auth in development.
+
+### Deploying it
+
+The container is nginx serving the built files, with basic auth in front and
+the token added on the way through. Create the password file first — never
+commit one:
+
+```bash
+# bcrypt, one line per user
+docker run --rm httpd:alpine htpasswd -nbB operator 'a-long-password' \
+  > dashboard/htpasswd
+
+docker compose -f docker-compose.prod.yml up -d --build dashboard
+```
+
+It listens on `127.0.0.1:8443`. **Terminate TLS in front of it** — basic auth
+over plain HTTP sends the password in clear. Caddy is one line:
+
+```
+dashboard.example.com { reverse_proxy 127.0.0.1:8443 }
+```
+
+The container refuses to start without `INTERNAL_TOKEN` or an htpasswd file,
+rather than coming up and failing every request.
+
+### What it will not do
+
+It renders; the engine decides. No number on the screen is computed in the
+browser — if something is missing, it gets added to the `/internal/` API, not to
+the UI. `docs/DASHBOARD.md` explains which endpoint feeds which view.
+
 ## Tenant isolation
 
 Every tenant table has `tenant_id` and row-level security. Requests run inside

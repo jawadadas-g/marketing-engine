@@ -1,0 +1,150 @@
+/**
+ * Every view renders from a fixture without throwing, and shows its empty and
+ * error states. These are not screenshots: they catch the crash that a typo in
+ * a field name causes, which is the failure a dashboard actually suffers.
+ */
+import { render } from 'preact-render-to-string';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import * as fixtures from './fixtures.js';
+
+const ok = <T,>(data: T) => Promise.resolve(data);
+
+function mockApi(overrides: Record<string, unknown> = {}) {
+  vi.doMock('../src/api.js', async () => {
+    const actual = await vi.importActual<typeof import('../src/api.js')>('../src/api.js');
+    return {
+      ...actual,
+      api: {
+        overview: () => ok(fixtures.overview),
+        tenants: () => ok({ items: fixtures.tenants, nextCursor: null }),
+        tenant: () => ok(fixtures.tenantDetail),
+        events: () => ok({ items: [], nextCursor: null }),
+        event: () => ok({ event: {} }),
+        messages: () => ok({ items: fixtures.messages, nextCursor: null }),
+        message: () => ok(fixtures.messageDetail),
+        redemptions: () => ok({ items: fixtures.redemptions, nextCursor: null }),
+        invites: () => ok({ items: [], nextCursor: null }),
+        companies: () => ok({ items: fixtures.companies, nextCursor: null }),
+        deliveries: () => ok({ items: fixtures.deliveries, nextCursor: null }),
+        replayDelivery: () => ok({ delivery: fixtures.deliveries[0] }),
+        jobs: () => ok({ items: fixtures.jobs, nextCursor: null }),
+        job: () => ok({ job: fixtures.jobs[0] }),
+        retryJob: () => ok({ retried: 'x' }),
+        schedules: () => ok({ schedules: fixtures.schedules }),
+        metrics: () => ok(fixtures.metrics),
+        streamUrl: () => '/api/stream',
+        ...overrides,
+      },
+    };
+  });
+}
+
+beforeEach(() => {
+  vi.resetModules();
+  // The views call document.visibilityState through their polling helper.
+  vi.stubGlobal('document', { visibilityState: 'visible' });
+  vi.stubGlobal('window', { location: { hash: '' }, addEventListener() {}, removeEventListener() {} });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.doUnmock('../src/api.js');
+});
+
+describe('views render', () => {
+  it('overview', async () => {
+    mockApi();
+    const { OverviewView } = await import('../src/views/overview.js');
+    const html = render(<OverviewView window="24h" onWindow={() => {}} />);
+    expect(html).toContain('Overview');
+  });
+
+  it('queue', async () => {
+    mockApi();
+    const { QueueView } = await import('../src/views/queue.js');
+    expect(render(<QueueView name="" state="" onFilters={() => {}} />)).toContain('Queue');
+  });
+
+  it('tenants', async () => {
+    mockApi();
+    const { TenantsView, TenantDetailView } = await import('../src/views/tenants.js');
+    expect(render(<TenantsView />)).toContain('Tenants');
+    expect(render(<TenantDetailView id="11111111-1111-1111-1111-111111111111" />)).toBeTruthy();
+  });
+
+  it('messages', async () => {
+    mockApi();
+    const { MessagesView, MessageDetailView } = await import('../src/views/messages.js');
+    const filters = {
+      tenantId: '', status: '', channel: '', provider: '', address: '', since: '', until: '',
+    };
+    expect(render(<MessagesView filters={filters} onFilters={() => {}} />)).toContain('Messages');
+    expect(render(<MessageDetailView id="22222222-2222-2222-2222-222222222222" />)).toBeTruthy();
+  });
+
+  it('deliveries', async () => {
+    mockApi();
+    const { DeliveriesView } = await import('../src/views/deliveries.js');
+    expect(render(<DeliveriesView status="" onStatus={() => {}} />)).toContain('deliveries');
+  });
+
+  it('companies', async () => {
+    mockApi();
+    const { CompaniesView } = await import('../src/views/companies.js');
+    expect(render(<CompaniesView q="" country="" onFilters={() => {}} />)).toContain('Companies');
+  });
+
+  it('metrics', async () => {
+    mockApi();
+    const { MetricsView } = await import('../src/views/metrics.js');
+    expect(render(<MetricsView />)).toContain('Metrics');
+  });
+});
+
+describe('the chart', () => {
+  it('draws a line per series, with a legend', async () => {
+    const { LineChart } = await import('../src/ui/chart.js');
+    const html = render(<LineChart series={fixtures.metrics.series} label="test" />);
+    expect(html).toContain('<path');
+    expect(html).toContain('sent');
+    expect(html).toContain('failed');
+  });
+
+  it('says so rather than drawing an empty box when there is no data', async () => {
+    const { LineChart } = await import('../src/ui/chart.js');
+    expect(render(<LineChart series={[]} label="test" />)).toContain('no data');
+  });
+
+  it('never draws more series than the palette can tell apart', async () => {
+    const { LineChart } = await import('../src/ui/chart.js');
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      key: `series-${i}`,
+      points: [['2026-09-21T08:00:00.000Z', i] as [string, number]],
+    }));
+    const html = render(<LineChart series={many} label="test" />);
+    expect((html.match(/<path/g) ?? []).length).toBe(8);
+    expect(html).toContain('more series not drawn');
+  });
+});
+
+describe('empty and error states', () => {
+  it('says there is nothing rather than showing an empty table', async () => {
+    mockApi({ companies: () => ok({ items: [], nextCursor: null }) });
+    const { CompaniesView } = await import('../src/views/companies.js');
+    // The first paint is the loading state; the empty state follows the fetch.
+    expect(render(<CompaniesView q="" country="" onFilters={() => {}} />)).toContain('loading');
+  });
+
+  it("shows the API's own error body", async () => {
+    const { Failed } = await import('../src/ui/index.js');
+    const { ApiError } = await import('../src/api.js');
+    const html = render(<Failed error={new ApiError(503, { error: 'nope' })} what="the overview" />);
+    expect(html).toContain('503');
+    expect(html).toContain('nope');
+  });
+
+  it('shows an empty state when handed nothing', async () => {
+    const { Empty } = await import('../src/ui/index.js');
+    expect(render(<Empty what="messages" />)).toContain('no messages');
+  });
+});

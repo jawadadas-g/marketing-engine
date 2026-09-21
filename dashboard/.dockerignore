@@ -1,0 +1,5 @@
+node_modules
+dist
+htpasswd
+.env.local
+test

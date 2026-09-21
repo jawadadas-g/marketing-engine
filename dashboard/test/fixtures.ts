@@ -1,0 +1,232 @@
+/**
+ * Shapes copied from docs/API.md and the operator API's own tests. Not imported
+ * from the engine: the dashboard is written against the published contract.
+ */
+import type {
+  CompanyRow,
+  DeliveryRow,
+  JobRow,
+  MessageDetail,
+  MessageRow,
+  Metrics,
+  Overview,
+  RedemptionRow,
+  ScheduleRow,
+  TenantDetail,
+  TenantRow,
+} from '../src/api.js';
+
+export const overview: Overview = {
+  asOf: '2026-09-21T10:00:00.000Z',
+  window: { since: '2026-09-20T10:00:00.000Z', until: '2026-09-21T10:00:00.000Z' },
+  health: { db: true, boss: 'running (3 queued)', version: '0.1.0' },
+  queue: [
+    { name: 'message.send', created: 3, active: 1, retry: 2, failed: 4, cancelled: 0, completedInWindow: 412 },
+  ],
+  messages: { queued: 3, sent: 200, delivered: 180, read: 40, failed: 4, blocked: 12 },
+  blockedReasons: { no_consent: 9, suppressed: 1, 'rule:sa-marketing-sms-hours': 2 },
+  tenants: [
+    {
+      tenantId: '11111111-1111-1111-1111-111111111111',
+      tenantName: 'Acme Supplies',
+      messages: { sent: 200, delivered: 180, failed: 4, blocked: 12 },
+      invites: { sent: 5, accepted: 1 },
+      redemptions: { reserved: 2, settled: 9, released: 1 },
+      webhookFailures: 0,
+    },
+  ],
+  webhooks: { pending: 1, failed: 2 },
+  reservations: { open: 2, expiringWithin15m: 1 },
+  discovery: { searches: 33, invitesFromSearch: 4 },
+};
+
+export const tenants: TenantRow[] = [
+  {
+    id: '11111111-1111-1111-1111-111111111111',
+    name: 'Acme Supplies',
+    externalRef: 'mkt-acme',
+    createdAt: '2026-09-01T09:00:00.000Z',
+    messages: { sent: 200, failed: 4, blocked: 12 },
+  },
+];
+
+export const tenantDetail: TenantDetail = {
+  tenant: {
+    id: '11111111-1111-1111-1111-111111111111',
+    name: 'Acme Supplies',
+    externalRef: 'mkt-acme',
+    createdAt: '2026-09-01T09:00:00.000Z',
+  },
+  channels: [
+    {
+      channel: 'sms',
+      provider: 'taqnyat',
+      sender: 'GASABLE-AD',
+      unsubscribeText: 'Reply STOP',
+      configured: true,
+      updatedAt: '2026-09-20T09:00:00.000Z',
+    },
+  ],
+  templates: [{ name: 'hello', channel: 'sms', updatedAt: '2026-09-20T09:00:00.000Z' }],
+  rules: { sending_window: 1 },
+  webhooks: [
+    {
+      id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      url: 'https://marketplace.test/hooks',
+      eventTypes: [],
+      active: true,
+      createdAt: '2026-09-20T09:00:00.000Z',
+    },
+  ],
+  counts: {
+    '24h': { messages: { sent: 200 }, invites: {}, redemptions: {} },
+    '7d': null,
+    '30d': null,
+  },
+};
+
+export const messages: MessageRow[] = [
+  {
+    id: '22222222-2222-2222-2222-222222222222',
+    tenantId: '11111111-1111-1111-1111-111111111111',
+    tenantName: 'Acme Supplies',
+    channel: 'sms',
+    address: '+966501234567',
+    region: 'SA',
+    purpose: 'transactional',
+    template: 'hello',
+    status: 'delivered',
+    blockedReason: null,
+    error: null,
+    provider: 'taqnyat',
+    providerMessageId: '10139535725',
+    companyId: null,
+    companyName: null,
+    parentMessageId: null,
+    fallbackChannels: [],
+    createdAt: '2026-09-21T09:00:00.000Z',
+    updatedAt: '2026-09-21T09:01:00.000Z',
+    timeline: [
+      { type: 'message.queued', at: '2026-09-21T09:00:00.000Z' },
+      { type: 'message.sent', at: '2026-09-21T09:00:30.000Z' },
+      { type: 'message.delivered', at: '2026-09-21T09:01:00.000Z' },
+    ],
+  },
+];
+
+export const messageDetail: MessageDetail = {
+  message: { ...messages[0]!, body: 'Hello Sam' },
+  events: [
+    { id: '1', type: 'message.queued', payload: {}, occurredAt: '2026-09-21T09:00:00.000Z' },
+    { id: '2', type: 'message.delivered', payload: { raw: { status: 'DELIVERED' } }, occurredAt: '2026-09-21T09:01:00.000Z' },
+  ],
+  deliveryReports: [
+    { id: '2', type: 'message.delivered', payload: { raw: { status: 'DELIVERED' } }, occurredAt: '2026-09-21T09:01:00.000Z' },
+  ],
+  fallbackChildren: [],
+  parent: null,
+};
+
+export const jobs: JobRow[] = [
+  {
+    id: '33333333-3333-3333-3333-333333333333',
+    name: 'message.send',
+    state: 'failed',
+    retryCount: 3,
+    retryLimit: 3,
+    data: { messageId: '22222222-2222-2222-2222-222222222222' },
+    output: { message: 'provider exploded' },
+    createdOn: '2026-09-21T09:00:00.000Z',
+    startedOn: '2026-09-21T09:00:01.000Z',
+    completedOn: '2026-09-21T09:00:05.000Z',
+    tenantId: '11111111-1111-1111-1111-111111111111',
+    tenantName: 'Acme Supplies',
+  },
+];
+
+export const schedules: ScheduleRow[] = [
+  {
+    name: 'promo.expire-reservations',
+    cron: '*/5 * * * *',
+    timezone: null,
+    data: null,
+    lastCompletedOn: '2026-09-21T09:55:00.000Z',
+    lastState: 'completed',
+    lastOutput: null,
+  },
+];
+
+export const deliveries: DeliveryRow[] = [
+  {
+    id: '44',
+    status: 'failed',
+    attempt: 5,
+    lastStatusCode: 500,
+    lastError: 'receiver answered 500',
+    nextAttemptAt: null,
+    deliveredAt: null,
+    createdAt: '2026-09-21T09:00:00.000Z',
+    endpointId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    url: 'https://marketplace.test/hooks',
+    tenantId: '11111111-1111-1111-1111-111111111111',
+    tenantName: 'Acme Supplies',
+    eventId: '1',
+    eventType: 'message.sent',
+  },
+];
+
+export const companies: CompanyRow[] = [
+  {
+    id: '55555555-5555-5555-5555-555555555555',
+    name: 'شركة الفلاح للتجارة',
+    country: 'SA',
+    onPlatformRef: null,
+    onPlatformAt: null,
+    createdAt: '2026-09-20T09:00:00.000Z',
+    buys: ['diesel'],
+    sells: [],
+    sector: 'energy',
+    city: 'Riyadh',
+  },
+];
+
+export const redemptions: RedemptionRow[] = [
+  {
+    id: '66666666-6666-6666-6666-666666666666',
+    tenantId: '11111111-1111-1111-1111-111111111111',
+    tenantName: 'Acme Supplies',
+    code: 'SAVE10',
+    buyerRef: 'cust-1',
+    orderRef: 'order-1',
+    currency: 'SAR',
+    discountAmount: '5000',
+    status: 'settled',
+    reservedAt: '2026-09-21T09:00:00.000Z',
+    settledAt: '2026-09-21T09:05:00.000Z',
+    releasedAt: null,
+    releaseReason: null,
+    expiresAt: '2026-09-21T10:00:00.000Z',
+  },
+];
+
+export const metrics: Metrics = {
+  bucket: 'hour',
+  series: [
+    {
+      key: 'sent',
+      points: [
+        ['2026-09-21T08:00:00.000Z', 12],
+        ['2026-09-21T09:00:00.000Z', 30],
+        ['2026-09-21T10:00:00.000Z', 7],
+      ],
+    },
+    {
+      key: 'failed',
+      points: [
+        ['2026-09-21T08:00:00.000Z', 1],
+        ['2026-09-21T09:00:00.000Z', 0],
+        ['2026-09-21T10:00:00.000Z', 2],
+      ],
+    },
+  ],
+};
