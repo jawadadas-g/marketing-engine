@@ -8,6 +8,7 @@ dist
 test
 scripts
 docs
+dashboard
 backups
 *.log
 docker-compose*.yml

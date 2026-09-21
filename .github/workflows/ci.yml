@@ -42,3 +42,13 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run e2e
+
+      # The dashboard is a separate app with its own dependencies.
+      - run: npm ci
+        working-directory: dashboard
+      - run: npm run typecheck
+        working-directory: dashboard
+      - run: npm test
+        working-directory: dashboard
+      - run: npm run build
+        working-directory: dashboard

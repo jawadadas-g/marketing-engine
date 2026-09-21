@@ -4,7 +4,9 @@ As of 2026-09-20.
 
 ## Purpose and the one rule
 
-The marketing engine is one standalone service that finds counterparties, sends messages and runs promocodes for its tenants. It owns no screens; clients (first among them the marketplace UI) call its API.
+The marketing engine is one standalone service that finds counterparties, sends messages and runs promocodes for its tenants. Clients (first among them the marketplace UI) call its API.
+
+The engine service serves only JSON. An operator dashboard lives in `dashboard/` as a separate static app that talks only to the `/internal/` API and deploys as its own container; deleting it changes nothing in the engine.
 
 The rule is keep it simple. Every choice below is the smallest thing that works today and can grow later without a rewrite. If a section here feels heavier than that, cut it.
 
@@ -165,5 +167,7 @@ Eight steps, in order, each one brief and one pull request. Nothing starts until
 Step 3 is the proving step: it exercises consent, rules, queue, an adapter and the event log together on raw contacts. After step 4 the messaging service is complete and standalone; anything that can call an API and hold provider credentials can use it. Discovery and promocodes are added on the same spine afterwards.
 
 | 9. Operator read API. Done 2026-09-21 | Platform-scope reads across every tenant: overview, feeds, pg-boss jobs and schedules, webhook deliveries, metrics, and a LISTEN/NOTIFY event stream over SSE; retry a failed job and replay a failed delivery | An operator dashboard answers what is queued, what each tenant sent and what failed, live, from the API alone |
+
+| 10. Operator dashboard. Done 2026-09-21 | `dashboard/`: a Preact static app served by nginx with basic auth, proxying `/api/` to `/internal/` and adding the token server-side; eight views, hand-built SVG charts, no UI kit | An operator opens a screen and sees the queue, every tenant's traffic, the live feed, and can retry a job or replay a delivery |
 
 After step 8 the engine is in production and everything in "Not in v1" becomes a candidate, one at a time, only when a tenant asks. `docs/V1.md` is the one-page account of what shipped, what it deliberately does not do, and where it is thin. Step 9 follows it: the operator read side the marketplace admin needs, which adds no domain behaviour and is described in `docs/DASHBOARD.md`.

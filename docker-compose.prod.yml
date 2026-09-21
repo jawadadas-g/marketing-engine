@@ -14,6 +14,24 @@ services:
       postgres:
         condition: service_healthy
 
+  # The operator screen. A separate image with its own lifecycle: stopping it
+  # takes nothing else down. Terminate TLS in front of it — Caddy is one line:
+  #   dashboard.example.com { reverse_proxy 127.0.0.1:8443 }
+  dashboard:
+    build: ./dashboard
+    image: marketing-engine-dashboard:latest
+    restart: always
+    environment:
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN}
+      ENGINE_URL: http://engine:3000
+    volumes:
+      # Create this with the instructions in dashboard/htpasswd.example.
+      - ./dashboard/htpasswd:/etc/nginx/htpasswd:ro
+    ports:
+      - '127.0.0.1:8443:8080'
+    depends_on:
+      - engine
+
   postgres:
     image: postgres:16
     restart: always
