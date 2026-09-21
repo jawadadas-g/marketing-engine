@@ -2,6 +2,7 @@ import PgBoss from 'pg-boss';
 import { asOwner, db, type Tx } from '../db/client.js';
 import { SEND_JOB } from '../modules/messaging/index.js';
 import { processSend } from '../modules/messaging/worker.js';
+import { EXPIRE_JOB, expireReservations } from '../modules/promocodes/index.js';
 
 /**
  * The queue. Modules call enqueue(); nothing else imports pg-boss.
@@ -31,6 +32,7 @@ export async function startJobs(opts: { registerWorkers?: boolean } = {}): Promi
   await b.createQueue(NOOP);
   await b.createQueue(IDEMPOTENCY_CLEANUP);
   await b.createQueue(SEND_JOB);
+  await b.createQueue(EXPIRE_JOB);
 
   boss = b;
   if (!registerWorkers) return b;
@@ -59,6 +61,14 @@ export async function startJobs(opts: { registerWorkers?: boolean } = {}): Promi
     if (deleted.count > 0) console.log(`idempotency.cleanup: deleted ${deleted.count} rows`);
   });
   await b.schedule(IDEMPOTENCY_CLEANUP, '0 * * * *');
+
+  await b.work(EXPIRE_JOB, async () => {
+    // A cart abandoned at checkout must not hold budget open against every
+    // other buyer forever.
+    const released = await expireReservations();
+    if (released > 0) console.log(`${EXPIRE_JOB}: released ${released} expired reservations`);
+  });
+  await b.schedule(EXPIRE_JOB, '*/5 * * * *');
 
   return b;
 }

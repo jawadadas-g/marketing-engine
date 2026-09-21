@@ -8,11 +8,13 @@ import { discovery, marketplace } from './routes/discovery.js';
 import { events } from './routes/events.js';
 import { health } from './routes/health.js';
 import { messaging } from './routes/messaging.js';
+import { promocodes } from './routes/promocodes.js';
 import { rules } from './routes/rules.js';
 import { unsubscribe } from './routes/unsubscribe.js';
 import { webhooks } from './routes/webhooks.js';
 import { InvalidAddressError } from '../spine/contacts/normalize.js';
 import { MessagingError } from '../modules/messaging/errors.js';
+import { PromocodeError } from '../modules/promocodes/index.js';
 
 export function createApp() {
   const app = new Hono<AuthVars>();
@@ -20,6 +22,9 @@ export function createApp() {
   app.onError((err, c) => {
     if (err instanceof HTTPException) return c.json({ error: err.message }, err.status);
     if (err instanceof InvalidAddressError) return c.json({ error: err.message }, 400);
+    if (err instanceof PromocodeError) {
+      return c.json({ error: err.code, message: err.message }, err.status);
+    }
     if (err instanceof MessagingError) {
       return c.json({ error: err.code, message: err.message, ...(err.detail ?? {}) }, err.status);
     }
@@ -40,6 +45,7 @@ export function createApp() {
   app.route('/', messaging);
   app.route('/', companies);
   app.route('/', discovery);
+  app.route('/', promocodes);
 
   return app;
 }

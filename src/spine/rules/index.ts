@@ -41,7 +41,7 @@ export async function evaluate(tx: Tx, input: EvaluateInput): Promise<EvaluateRe
   for (const rule of rules) {
     let denied: boolean;
     try {
-      denied = jsonLogic.apply(rule.document as never, input.context) === true;
+      denied = jsonLogic.apply(asDocument(rule.document) as never, input.context) === true;
     } catch (err) {
       // A broken document must not quietly allow the whole call, and must not
       // take down every other rule either. Skip it and keep going.
@@ -76,7 +76,7 @@ export async function decide<T>(tx: Tx, input: DecideInput): Promise<DecideResul
   for (const rule of rules) {
     let value: unknown;
     try {
-      value = jsonLogic.apply(rule.document as never, input.context);
+      value = jsonLogic.apply(asDocument(rule.document) as never, input.context);
     } catch (err) {
       console.error(`rules: ${input.kind} rule ${rule.id} (${rule.name}) threw, skipping`, err);
       continue;
@@ -110,6 +110,33 @@ function load(
       )
     order by ${rank}, created_at, id
   `;
+}
+
+/**
+ * Run one json-logic document that is not a row in `rules` — a condition
+ * carried inline on something else, like a promocode's own eligibility. Returns
+ * the raw result; the caller decides what truthy means, since an inline
+ * document is usually a permit condition rather than a deny one.
+ *
+ * Here so json-logic stays behind this folder.
+ */
+export function applyDocument(document: unknown, context: Record<string, unknown>): unknown {
+  return jsonLogic.apply(asDocument(document) as never, context);
+}
+
+/**
+ * A document stored double-encoded — a jsonb holding a JSON *string* rather
+ * than an object, which is what `JSON.stringify(doc)::jsonb` produces — would
+ * otherwise evaluate to that string, which json-logic treats as a constant.
+ * For a deny rule that means silently never firing, so unwrap it once.
+ */
+function asDocument(document: unknown): unknown {
+  if (typeof document !== 'string') return document;
+  try {
+    return JSON.parse(document);
+  } catch {
+    return document;
+  }
 }
 
 /** Rules this tenant may see: platform, region and its own. */

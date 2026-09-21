@@ -65,6 +65,7 @@ async function addCompany(
 
 type SearchResult = {
   finder: string;
+  finderRunId: number;
   candidates: { company: Company; score: number; reasons: string[] }[];
 };
 
@@ -221,7 +222,23 @@ describe('invites', () => {
     await configureMessaging();
     const company = await addCompany('Invitee Co', { buys: ['diesel'], city: 'Riyadh' });
 
-    const { invite, message } = await sendInvite(company.id);
+    // Invite from a search result, so the run can be judged by its outcome.
+    const found = await search({ buys: ['diesel'], city: 'Riyadh' });
+    const inviteRes = await request(`/v1/companies/${company.id}/invite`, {
+      method: 'POST',
+      ...json({
+        contact: { phone: PHONE },
+        channel: 'sms',
+        template: 'invite',
+        finderRunId: found.finderRunId,
+      }),
+    });
+    const { invite, message } = (await inviteRes.json()) as InviteResponse;
+
+    const [linked] = await db()<{ finder_run_id: string }[]>`
+      select finder_run_id from invites where id = ${invite!.id}
+    `;
+    expect(Number(linked!.finder_run_id)).toBe(found.finderRunId);
     expect(invite!.status).toBe('sent');
     expect(message.status).toBe('queued');
     expect(message.body).toContain(`/i/${invite!.token}`);
