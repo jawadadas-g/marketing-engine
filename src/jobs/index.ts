@@ -26,6 +26,12 @@ export async function startJobs(opts: { registerWorkers?: boolean } = {}): Promi
     await b.createQueue(name);
   }
 
+  // Schedules are part of what the queue is, not of whether this process
+  // consumes it: a second replica that registers no workers should still see
+  // the same crons declared.
+  await b.schedule(IDEMPOTENCY_CLEANUP, '0 * * * *');
+  await b.schedule(EXPIRE_JOB, '*/5 * * * *');
+
   if (!registerWorkers) return b;
 
   await b.work(NOOP, async () => {});
@@ -63,7 +69,6 @@ export async function startJobs(opts: { registerWorkers?: boolean } = {}): Promi
     `;
     if (deleted.count > 0) console.log(`idempotency.cleanup: deleted ${deleted.count} rows`);
   });
-  await b.schedule(IDEMPOTENCY_CLEANUP, '0 * * * *');
 
   await b.work(EXPIRE_JOB, async () => {
     // A cart abandoned at checkout must not hold budget open against every
@@ -71,7 +76,6 @@ export async function startJobs(opts: { registerWorkers?: boolean } = {}): Promi
     const released = await expireReservations();
     if (released > 0) console.log(`${EXPIRE_JOB}: released ${released} expired reservations`);
   });
-  await b.schedule(EXPIRE_JOB, '*/5 * * * *');
 
   return b;
 }

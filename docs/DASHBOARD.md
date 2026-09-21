@@ -1,0 +1,142 @@
+# Building the operator dashboard
+
+For whoever builds the admin screen in the marketplace. The engine serves the
+data; it owns no HTML and never will.
+
+**The one rule: the admin renders, the engine decides.** If a number needs
+computing, a state needs interpreting, or a decision needs making, it happens
+in the engine and arrives as a field. A dashboard that recomputes something the
+engine already knows will eventually disagree with it, and then nobody knows
+which is right.
+
+## Authentication
+
+Every endpoint here is under `/internal/` and takes `X-Internal-Token: <INTERNAL_TOKEN>`
+— the marketplace's own key, not a tenant JWT. A tenant JWT on these routes is
+a 401. **The dashboard must call these from its own server, never from a
+browser**: the internal token opens every tenant's data.
+
+## Conventions
+
+- Lists take `limit` (1..500, default 100) and `cursor` (the last row's `id`),
+  return `{ items, nextCursor }`, newest first. `nextCursor` is `null` on the
+  last page. Never an offset: rows arrive while you page, and an offset would
+  skip and repeat them.
+- Windows are `since`/`until` ISO timestamps, or `window=1h|24h|7d|30d` as
+  shorthand for `since = now - window`.
+- Cross-tenant rows carry `tenantId` and `tenantName`.
+- Secrets never appear. Channel configs come back redacted exactly as the
+  tenant's own `GET` returns them, and webhook endpoints never include their
+  signing secret.
+
+## The six views
+
+### 1. Overview
+
+**`GET /internal/overview?window=24h`**, polled every 10 seconds.
+
+One call fills the whole screen: health, per-queue job counts, message counts
+by status, why messages were blocked, a row per tenant, webhook pending and
+failed, open reservations and how many expire within fifteen minutes, and
+discovery search counts.
+
+Nothing is cached, so what it says is true at `asOf`. Render `blockedReasons`
+prominently — `no_consent`, `suppressed`, `rule:<name>` — because that is where
+a misconfigured tenant shows up first.
+
+### 2. Live feed
+
+**`GET /internal/stream`**, Server-Sent Events. Optional `tenantId` and `type`
+(a trailing `*` is a prefix: `message.*`).
+
+```
+id: 48213
+event: message.sent
+data: {"id":"48213","type":"message.sent","tenantId":"…","subjectType":"message", …}
+```
+
+- Use `EventSource`, or any SSE client, from your server.
+- **Send `Last-Event-ID` on reconnect.** The engine replays what you missed from
+  the event table (up to 1000) and then continues live, so a dropped connection
+  loses nothing.
+- A comment line arrives every 15 seconds so idle proxies do not close it.
+- The payload is deliberately small. For an event's full payload, call
+  **`GET /internal/events/:id`**.
+- At most 20 concurrent streams; the 21st gets a 503. One stream per dashboard
+  process, fanned out to browsers by you — not one per open tab.
+
+### 3. Queue
+
+**`GET /internal/jobs?name&state&limit&cursor`** and
+**`GET /internal/jobs/:id`**. On demand, plus the overview's queue section for
+the counts.
+
+States are pg-boss's: `created`, `retry`, `active`, `completed`, `cancelled`,
+`failed`. A failed job carries its error in `output`. When a job's data names a
+message or a delivery, the row carries that owner's `tenantId` and `tenantName`.
+
+**`POST /internal/jobs/:id/retry`** puts a `failed` job back. Any other state is
+a 409 — a job that is still going does not need help, and a completed one would
+run twice.
+
+**`GET /internal/schedules`** lists the crons with their cron strings, when each
+last completed and how it went.
+
+### 4. Per-tenant
+
+**`GET /internal/tenants`** for the list with 24-hour counts, and
+**`GET /internal/tenants/:id`** for one: its channels (redacted), template
+names, rule counts by kind, webhook endpoints, and counts over 24h, 7d and 30d.
+
+Drill down with the feeds, all filtered by `tenantId`:
+**`/internal/messages`**, **`/internal/events`**, **`/internal/redemptions`**,
+**`/internal/invites`**.
+
+### 5. Message detail
+
+**`GET /internal/messages?…`** already gives each row a `timeline` — its own
+events in order — so the list answers "what happened to this?" without a click.
+
+**`GET /internal/messages/:id`** gives the rest: every event, the delivery
+reports with the provider's raw body, the fallback children, and the parent if
+this message is itself a fallback. This is the view for "why did this not
+arrive?", and the raw body is usually the answer.
+
+### 6. Deliveries
+
+**`GET /internal/webhook-deliveries?status=failed`** across every tenant, with
+the event type and the endpoint URL. Attempts run at 1m, 5m, 30m, 2h and 12h
+before a delivery is marked `failed`.
+
+**`POST /internal/webhook-deliveries/:id/replay`** queues it again, for any
+tenant including the platform endpoint.
+
+## Charts
+
+**`GET /internal/metrics?series=&bucket=&window=&tenantId=&groupBy=`**
+
+`series` is `messages`, `events`, `redemptions` or `searches`; `bucket` is
+`hour` or `day`; `groupBy` is `status` or `channel` for messages, `status` for
+redemptions, `type` for events. Returns `{ bucket, series: [{ key, points: [[ts, count]] }] }`.
+
+Enough for a chart and nothing more. It is not a metrics system, and if you
+need percentiles or retention, read the event log into something that is.
+
+## Refresh model
+
+| View | How |
+| --- | --- |
+| Overview | poll every 10s |
+| Live feed | SSE, always connected |
+| Queue | on demand, plus a poll while someone is watching a retry |
+| Per-tenant | on demand |
+| Message detail | on demand |
+| Deliveries | on demand |
+
+## What is not here
+
+No write endpoints beyond retry and replay. No per-tenant dashboard routes —
+tenants already have their own scoped lists under `/v1`. No HTML. If the
+dashboard needs something the engine does not expose, add a read endpoint here
+rather than reaching into the database: direct database access is how two
+sources of truth start.
