@@ -28,6 +28,7 @@ export type InviteRow = {
   token: string;
   status: 'sent' | 'accepted' | 'expired';
   accepted_ref: string | null;
+  finder_run_id: string | null;
   created_at: Date;
   accepted_at: Date | null;
   expires_at: Date;
@@ -35,6 +36,8 @@ export type InviteRow = {
 
 export type SearchResult = {
   finder: string;
+  /** Pass this back on an invite so the search can be judged by its outcome. */
+  finderRunId: number;
   candidates: {
     company: CompanyRow;
     profile: ProfileRow | null;
@@ -58,10 +61,11 @@ export async function search(
   const candidates = await finder.find(tx, input.tenantId, input.query);
   const durationMs = Date.now() - startedAt;
 
-  await tx`
+  const [run] = await tx<{ id: string }[]>`
     insert into finder_runs (tenant_id, finder, query, result_count, duration_ms)
     values (${input.tenantId}, ${finder.name}, ${tx.json(input.query as never)},
             ${candidates.length}, ${durationMs})
+    returning id
   `;
 
   await emit(tx, {
@@ -69,10 +73,19 @@ export async function search(
     type: 'discovery.searched',
     subjectType: 'search',
     subjectId: finder.name,
-    payload: { finder: finder.name, query: input.query, count: candidates.length },
+    payload: {
+      finder: finder.name,
+      finderRunId: Number(run!.id),
+      query: input.query,
+      count: candidates.length,
+    },
   });
 
-  return { finder: finder.name, candidates: await hydrate(tx, candidates) };
+  return {
+    finder: finder.name,
+    finderRunId: Number(run!.id),
+    candidates: await hydrate(tx, candidates),
+  };
 }
 
 async function hydrate(tx: Tx, candidates: Candidate[]): Promise<SearchResult['candidates']> {
@@ -165,6 +178,8 @@ export async function invite(
     variables?: Record<string, unknown> | undefined;
     defaultCountry?: string | undefined;
     expiresInDays?: number | undefined;
+    /** The search this invite came out of, when it came out of one. */
+    finderRunId?: number | undefined;
   },
 ): Promise<InviteResult> {
   const token = randomBytes(32).toString('base64url');
@@ -185,9 +200,10 @@ export async function invite(
 
   const days = input.expiresInDays ?? DEFAULT_INVITE_DAYS;
   const [row] = await tx<InviteRow[]>`
-    insert into invites (tenant_id, company_id, message_id, token, status, expires_at)
+    insert into invites
+      (tenant_id, company_id, message_id, token, status, expires_at, finder_run_id)
     values (${input.tenantId}, ${input.companyId}, ${message.id}, ${token}, 'sent',
-            now() + (${days} || ' days')::interval)
+            now() + (${days} || ' days')::interval, ${input.finderRunId ?? null})
     returning *
   `;
   if (!row) throw new Error('invite wrote no row');
@@ -197,7 +213,12 @@ export async function invite(
     type: 'invite.sent',
     subjectType: 'invite',
     subjectId: row.id,
-    payload: { companyId: input.companyId, messageId: message.id, expiresAt: row.expires_at },
+    payload: {
+      companyId: input.companyId,
+      messageId: message.id,
+      expiresAt: row.expires_at,
+      finderRunId: row.finder_run_id,
+    },
   });
 
   return { invite: row, message };
@@ -258,7 +279,11 @@ export async function acceptInvite(input: {
       type: 'invite.accepted',
       subjectType: 'invite',
       subjectId: row.id,
-      payload: { companyId: row.company_id, ref: input.ref },
+      payload: {
+        companyId: row.company_id,
+        ref: input.ref,
+        finderRunId: row.finder_run_id,
+      },
     });
 
     return { ok: true, companyId: row.company_id, tenantId: row.tenant_id };

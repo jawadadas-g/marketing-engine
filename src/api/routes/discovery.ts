@@ -47,6 +47,8 @@ const inviteBody = z.object({
   variables: z.record(z.unknown()).optional(),
   defaultCountry: z.string().length(2).optional(),
   expiresInDays: z.number().int().min(1).max(365).optional(),
+  /** Pass this when the invite came from a search result. */
+  finderRunId: z.coerce.number().int().positive().optional(),
 });
 
 export const discovery = new Hono<AuthVars>();
