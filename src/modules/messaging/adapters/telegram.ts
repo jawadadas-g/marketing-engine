@@ -1,4 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
+import { env } from '../../../env.js';
 import type {
   ChannelAdapter,
   CredentialCheck,
@@ -70,11 +71,11 @@ export const telegramAdapter: ChannelAdapter = {
    * who gets it wrong is told nothing.
    */
   parseWebhook(req: WebhookRequest): ProviderEvent[] {
-    const expected = process.env.WEBHOOK_TOKEN ?? '';
+    const expected = env().WEBHOOK_TOKEN;
     const given = req.headers['x-telegram-bot-api-secret-token'] ?? '';
     const a = Buffer.from(given);
     const b = Buffer.from(expected);
-    if (!expected || a.length !== b.length || !timingSafeEqual(a, b)) {
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
       throw new WebhookAuthError(404, 'telegram: bad secret token');
     }
 

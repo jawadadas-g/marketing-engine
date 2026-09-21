@@ -1,3 +1,4 @@
+import { env } from '../../env.js';
 import { normalize } from '../contacts/normalize.js';
 
 export const IDENTIFIER_TYPES = ['cr', 'vat', 'domain', 'phone', 'email'] as const;
@@ -28,7 +29,7 @@ const FREE_MAIL = new Set([
 
 /** The marketplace's own domain identifies the marketplace, not a counterparty. */
 function ownDomain(): string | undefined {
-  return process.env.PLATFORM_DOMAIN?.trim().toLowerCase() || undefined;
+  return env().PLATFORM_DOMAIN?.trim().toLowerCase() || undefined;
 }
 
 export function isUselessDomain(domain: string): boolean {

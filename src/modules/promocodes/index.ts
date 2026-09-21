@@ -1,4 +1,5 @@
 import { db, type Tx } from '../../db/client.js';
+import { env } from '../../env.js';
 import { emit } from '../../spine/events/index.js';
 import { applyDocument, evaluate } from '../../spine/rules/index.js';
 import { activeLedger } from './ledger/index.js';
@@ -284,7 +285,7 @@ export async function reserve(
   const [promo] = await tx<PromocodeRow[]>`
     select * from promocodes where id = ${verdict.promocodeId}
   `;
-  const ttl = input.ttlMinutes ?? Number(process.env.RESERVATION_TTL_MINUTES ?? 60);
+  const ttl = input.ttlMinutes ?? env().RESERVATION_TTL_MINUTES;
 
   const [row] = await tx<RedemptionRow[]>`
     insert into redemptions

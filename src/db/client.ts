@@ -1,12 +1,11 @@
 import postgres from 'postgres';
+import { env } from '../env.js';
 
 export type Sql = postgres.Sql<{}>;
 export type Tx = postgres.TransactionSql<{}>;
 
 function connectionString(): string {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error('DATABASE_URL is not set');
-  return url;
+  return env().DATABASE_URL;
 }
 
 let pool: Sql | undefined;

@@ -1,5 +1,6 @@
 import PgBoss from 'pg-boss';
 import { asOwner, db, type Tx } from '../db/client.js';
+import { env } from '../env.js';
 import { SEND_JOB } from '../modules/messaging/index.js';
 import { processSend } from '../modules/messaging/worker.js';
 import { EXPIRE_JOB, expireReservations } from '../modules/promocodes/index.js';
@@ -22,10 +23,7 @@ export async function startJobs(opts: { registerWorkers?: boolean } = {}): Promi
   if (boss) return boss;
   const registerWorkers = opts.registerWorkers ?? true;
 
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) throw new Error('DATABASE_URL is not set');
-
-  const b = new PgBoss({ connectionString });
+  const b = new PgBoss({ connectionString: env().DATABASE_URL });
   b.on('error', (err) => console.error('pg-boss error', err));
   await b.start();
 

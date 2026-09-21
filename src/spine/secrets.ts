@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { env } from '../env.js';
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_BYTES = 12;
@@ -9,13 +10,7 @@ let cached: Buffer | undefined;
 
 function key(): Buffer {
   if (!cached) {
-    const hex = process.env.CREDENTIALS_KEY;
-    if (!hex) throw new Error('CREDENTIALS_KEY is not set');
-    const buf = Buffer.from(hex, 'hex');
-    if (buf.length !== 32) {
-      throw new Error('CREDENTIALS_KEY must be 32 bytes of hex (openssl rand -hex 32)');
-    }
-    cached = buf;
+    cached = Buffer.from(env().CREDENTIALS_KEY, 'hex');
   }
   return cached;
 }

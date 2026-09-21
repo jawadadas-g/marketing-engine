@@ -17,6 +17,9 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
+    "@opentelemetry/sdk-node": "^0.222.0",
     "hono": "^4.6.14",
     "jose": "^5.9.6",
     "json-logic-js": "^2.0.5",

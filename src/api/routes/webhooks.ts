@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
 import { db } from '../../db/client.js';
+import { env } from '../../env.js';
 import {
   adaptersForProvider,
   WebhookAuthError,
@@ -113,8 +114,7 @@ async function configByHint(
 }
 
 function tokenMatches(given: string): boolean {
-  const expected = process.env.WEBHOOK_TOKEN ?? '';
-  if (!expected) return false;
+  const expected = env().WEBHOOK_TOKEN;
   const a = Buffer.from(given);
   const b = Buffer.from(expected);
   return a.length === b.length && timingSafeEqual(a, b);

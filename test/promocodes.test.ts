@@ -8,6 +8,7 @@ import {
   reserve,
   type Reconciliation,
 } from '../src/modules/promocodes/index.js';
+import { resetEnv } from '../src/env.js';
 import { TENANT_A, TENANT_B, resetDb, startQueue, teardownDb, tokenFor } from './helpers.js';
 
 const app = createApp();
@@ -117,12 +118,14 @@ beforeAll(async () => {
 
 afterAll(async () => {
   process.env.LEDGER = 'internal';
+  resetEnv();
   await teardownDb();
 });
 
 beforeEach(async () => {
   await resetDb();
   process.env.LEDGER = 'internal';
+  resetEnv();
 });
 
 describe('validate', () => {
@@ -436,6 +439,7 @@ describe('ledger selection', () => {
   it('fails loudly and writes nothing when the finance engine is not configured', async () => {
     await createCode();
     process.env.LEDGER = 'finance-engine';
+    resetEnv();
 
     const res = await request('/v1/redemptions', {
       method: 'POST',

@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { db, type Tx } from '../../db/client.js';
+import { env } from '../../env.js';
 import { emit } from '../../spine/events/index.js';
 import type { Channel } from '../../spine/contacts/normalize.js';
 import { resolve, type CompanyRow } from '../../spine/registry/index.js';
@@ -183,7 +184,7 @@ export async function invite(
   },
 ): Promise<InviteResult> {
   const token = randomBytes(32).toString('base64url');
-  const base = (process.env.PUBLIC_BASE_URL ?? '').replace(/\/+$/, '');
+  const base = env().PUBLIC_BASE_URL.replace(/\/+$/, '');
 
   const message = await send(tx, {
     tenantId: input.tenantId,

@@ -1,3 +1,4 @@
+import { env } from '../../../env.js';
 import { wathqLookup } from './wathq.js';
 import type { CompanyLookup } from './types.js';
 
@@ -15,7 +16,7 @@ let announced = false;
 export function companyLookup(): CompanyLookup | null {
   if (override !== undefined) return override;
 
-  const enabled = Boolean(process.env.WATHQ_API_KEY);
+  const enabled = Boolean(env().WATHQ_API_KEY);
   if (!announced) {
     announced = true;
     console.log(

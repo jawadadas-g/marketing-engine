@@ -1,3 +1,4 @@
+import { env } from '../../../env.js';
 import type { CompanyFacts, CompanyLookup } from './types.js';
 
 const DEFAULT_BASE_URL = 'https://api.wathq.sa';
@@ -21,10 +22,10 @@ export const wathqLookup: CompanyLookup = {
   provider: 'wathq',
 
   async byCr(cr: string): Promise<CompanyFacts | null> {
-    const apiKey = process.env.WATHQ_API_KEY;
+    const apiKey = env().WATHQ_API_KEY;
     if (!apiKey) return null;
 
-    const baseUrl = (process.env.WATHQ_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
+    const baseUrl = (env().WATHQ_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
 
     let res: Response;
     try {
