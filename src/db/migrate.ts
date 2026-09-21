@@ -1,6 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadEnv } from '../env.js';
 import { closeDb, db } from './client.js';
 
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
@@ -38,6 +39,15 @@ export async function migrate(): Promise<string[]> {
 
 const invokedDirectly = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
 if (invokedDirectly) {
+  // The container runs this before the service, so it is the first thing to
+  // meet a bad environment. Say what is wrong, not where it was thrown.
+  try {
+    loadEnv();
+  } catch (err) {
+    console.error((err as Error).message);
+    process.exit(1);
+  }
+
   const ran = await migrate();
   console.log(ran.length ? `applied: ${ran.join(', ')}` : 'nothing to apply');
   await closeDb();
