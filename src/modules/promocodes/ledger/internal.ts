@@ -1,8 +1,6 @@
 import type { Tx } from '../../../db/client.js';
 import type { Balance, HoldInput, Ledger } from './types.js';
 
-type EntryRow = { id: string; amount: string; kind: string };
-
 /**
  * The ledger as a table in this database. One row per posting, append-only.
  * A hold's reference is the id of the row that created it, so every later
@@ -17,18 +15,22 @@ export const internalLedger: Ledger = {
   async hold(tx: Tx, input: HoldInput): Promise<{ holdRef: string }> {
     assertAmount(input.amount);
 
-    const [row] = await tx<EntryRow[]>`
-      insert into ledger_entries
-        (tenant_id, redemption_id, party, currency, kind, amount, hold_ref)
-      values (${input.tenantId}, ${input.redemptionId}, ${input.party}, ${input.currency},
-              'hold', ${input.amount}, '')
-      returning id, amount, kind
+    // A hold is its own reference. The id comes from the sequence first so the
+    // row can be written once, with hold_ref already set: this table is
+    // append-only, and nothing here is ever updated after the fact.
+    const [next] = await tx<{ id: string }[]>`
+      select nextval('ledger_entries_id_seq')::text as id
     `;
-    if (!row) throw new Error('ledger: hold wrote no entry');
+    const holdRef = next!.id;
 
-    // The hold is its own reference; it is only knowable after the insert.
-    await tx`update ledger_entries set hold_ref = ${row.id} where id = ${row.id}`;
-    return { holdRef: row.id };
+    await tx`
+      insert into ledger_entries
+        (id, tenant_id, redemption_id, party, currency, kind, amount, hold_ref)
+      values (${holdRef}, ${input.tenantId}, ${input.redemptionId}, ${input.party},
+              ${input.currency}, 'hold', ${input.amount}, ${holdRef})
+    `;
+
+    return { holdRef };
   },
 
   async capture(tx, input): Promise<void> {
