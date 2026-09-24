@@ -28,6 +28,20 @@ export type Selection = {
   fallback: Channel[];
   /** Why each candidate was not chosen, for the blocked event's payload. */
   reasons: Record<string, string>;
+  /**
+   * The first channel that passed suppression and consent and was held back
+   * only by a sending_window rule. Set only when nothing was chosen: it is the
+   * structured answer to "would this go out later?", so a caller never has to
+   * parse `rule:<name>` out of `reasons`.
+   */
+  windowBlock?: WindowBlock;
+};
+
+export type WindowBlock = {
+  channel: Channel;
+  /** The address's region, which is what decides whose sending rules apply. */
+  region: string | null;
+  rule: { id: string; name: string };
 };
 
 /**
@@ -82,6 +96,8 @@ export async function selectChannel(
 
   const ordered = await orderFor(tx, input, available, consented);
 
+  let windowBlock: WindowBlock | undefined;
+
   for (let i = 0; i < ordered.length; i += 1) {
     const channel = ordered[i]!;
     const address = addressFor(input.contact, channel)!;
@@ -104,9 +120,14 @@ export async function selectChannel(
       return { chosen: { channel, address }, fallback, reasons };
     }
     reasons[channel] = verdict.reason === 'rule' ? `rule:${verdict.rule?.name}` : verdict.reason;
+    // canSend only answers `rule` after suppression and consent have passed,
+    // and the only rules it evaluates are sending_window ones.
+    if (verdict.reason === 'rule' && verdict.rule && !windowBlock) {
+      windowBlock = { channel, region: regionOfAddress(channel, address, input.defaultCountry), rule: verdict.rule };
+    }
   }
 
-  return { fallback: [], reasons };
+  return { fallback: [], reasons, ...(windowBlock ? { windowBlock } : {}) };
 }
 
 async function orderFor(
@@ -169,6 +190,14 @@ function regionOf(contact: ContactInput, defaultCountry?: string): string | null
       address: contact.phone,
       ...(defaultCountry ? { defaultCountry } : {}),
     }).region;
+  } catch {
+    return null;
+  }
+}
+
+function regionOfAddress(channel: Channel, address: string, defaultCountry?: string): string | null {
+  try {
+    return normalize({ channel, address, ...(defaultCountry ? { defaultCountry } : {}) }).region;
   } catch {
     return null;
   }

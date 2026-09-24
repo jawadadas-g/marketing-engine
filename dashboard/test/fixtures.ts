@@ -246,6 +246,7 @@ const run = {
   blocked: 18,
   skipped: 2,
   pending: 340,
+  deferred: 120,
   error: null,
 };
 
@@ -278,7 +279,7 @@ export const campaignDetail: CampaignDetail = {
     variables: { offer: '5%' },
     audienceKind: 'search',
   },
-  runs: [run, { ...run, id: '66666666-6666-6666-6666-666666666666', runNo: 2, status: 'done', pending: 0, queued: 470, blocked: 28, skipped: 2, finishedAt: '2026-09-14T07:20:00.000Z' }],
+  runs: [run, { ...run, id: '66666666-6666-6666-6666-666666666666', runNo: 2, status: 'done', pending: 0, deferred: 0, queued: 470, blocked: 28, skipped: 2, finishedAt: '2026-09-14T07:20:00.000Z' }],
 };
 
 export const recipients: RecipientRow[] = [
@@ -290,11 +291,28 @@ export const recipients: RecipientRow[] = [
     telegram: null,
     state: 'blocked',
     reason: 'no_consent',
+    notBefore: null,
     messageId: '22222222-2222-2222-2222-222222222222',
     channel: 'sms',
     messageStatus: 'blocked',
     messageBlockedReason: 'no_channel',
     messageError: null,
     messageUpdatedAt: '2026-09-21T09:00:02.000Z',
+  },
+  {
+    id: '88888888-8888-8888-8888-888888888888',
+    name: 'Jeddah Transport',
+    phone: '+966501234568',
+    email: null,
+    telegram: null,
+    state: 'pending',
+    reason: 'deferred:sa-marketing-sms-hours',
+    notBefore: '2026-09-22T06:00:00.000Z',
+    messageId: null,
+    channel: null,
+    messageStatus: null,
+    messageBlockedReason: null,
+    messageError: null,
+    messageUpdatedAt: null,
   },
 ];

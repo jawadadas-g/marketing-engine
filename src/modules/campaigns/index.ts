@@ -11,4 +11,13 @@ export * from './campaigns.js';
 export * from './contacts.js';
 export { CronError, nextOccurrence, parseCron } from './cron.js';
 export { CampaignError } from './errors.js';
-export { processBatch, runCampaign, type BatchJob, type BatchOutcome, type RunJob } from './worker.js';
+export {
+  POISON_ATTEMPTS,
+  processBatch,
+  runCampaign,
+  type BatchJob,
+  type BatchOutcome,
+  type RunJob,
+} from './worker.js';
+export { SWEEP_CRON, SWEEP_JOB, sweepRuns, type SweepAction } from './sweep.js';
+export { WINDOW_HORIZON_DAYS, WINDOW_STEP_MINUTES, windowStats } from './window.js';

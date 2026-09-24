@@ -3,8 +3,11 @@ import { db } from '../db/client.js';
 import {
   CAMPAIGN_BATCH_JOB,
   CAMPAIGN_RUN_JOB,
+  SWEEP_CRON,
+  SWEEP_JOB,
   processBatch,
   runCampaign,
+  sweepRuns,
   type BatchJob,
   type RunJob,
 } from '../modules/campaigns/index.js';
@@ -30,7 +33,7 @@ export async function startJobs(opts: { registerWorkers?: boolean } = {}): Promi
 
   const b = await openQueue();
 
-  for (const name of [NOOP, IDEMPOTENCY_CLEANUP, SEND_JOB, EXPIRE_JOB, FANOUT_JOB, DELIVER_JOB]) {
+  for (const name of [NOOP, IDEMPOTENCY_CLEANUP, SEND_JOB, EXPIRE_JOB, FANOUT_JOB, DELIVER_JOB, SWEEP_JOB]) {
     await b.createQueue(name);
   }
   // `short`: while one job with a singleton key is waiting, another with the
@@ -45,6 +48,7 @@ export async function startJobs(opts: { registerWorkers?: boolean } = {}): Promi
   // the same crons declared.
   await b.schedule(IDEMPOTENCY_CLEANUP, '0 * * * *');
   await b.schedule(EXPIRE_JOB, '*/5 * * * *');
+  await b.schedule(SWEEP_JOB, SWEEP_CRON);
 
   if (!registerWorkers) return b;
 
@@ -94,6 +98,14 @@ export async function startJobs(opts: { registerWorkers?: boolean } = {}): Promi
       delete from idempotency_keys where created_at < now() - interval '24 hours'
     `;
     if (deleted.count > 0) console.log(`idempotency.cleanup: deleted ${deleted.count} rows`);
+  });
+
+  await b.work(SWEEP_JOB, async (jobs) => {
+    for (const job of jobs) {
+      // Runs whose job chain died: back on the queue, or finished.
+      const touched = await withJobLog(SWEEP_JOB, job.id, () => sweepRuns());
+      if (touched.length > 0) console.log(JSON.stringify({ msg: `${SWEEP_JOB}: recovered runs`, touched }));
+    }
   });
 
   await b.work(EXPIRE_JOB, async () => {

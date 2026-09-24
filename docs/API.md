@@ -639,11 +639,14 @@ A wrong state is `409 invalid_state`.
 { "items": [{ "id": "…", "runNo": 2, "status": "sending",
               "startedAt": "…", "finishedAt": null,
               "audienceSize": 500, "queued": 140, "blocked": 18, "skipped": 2,
-              "pending": 340, "error": null }] }
+              "pending": 340, "deferred": 120, "error": null }] }
 ```
 
 Newest first. Run statuses: `expanding`, `sending`, `done`, `cancelled`,
-`failed`. The counts update as the run sends.
+`failed`. The counts update as the run sends. `deferred` is the part of
+`pending` waiting on a sending window (pending with `notBefore` in the future).
+The same counts appear on each campaign's `lastRun` and on
+`/internal/campaigns`.
 
 ### `GET /v1/campaigns/:id/runs/:runId/recipients?state=&limit=&cursor=`
 
@@ -651,7 +654,7 @@ Who got it, who didn't, and why, in one call:
 
 ```json
 { "items": [{ "contactId": "…", "name": "…", "phone": "…", "email": null, "telegram": null,
-              "state": "blocked", "reason": "no_consent", "messageId": "…",
+              "state": "blocked", "reason": "no_consent", "notBefore": null, "messageId": "…",
               "message": { "channel": "sms", "status": "blocked", "blockedReason": "no_channel",
                            "error": null, "updatedAt": "…" } }],
   "nextCursor": null }
@@ -663,19 +666,45 @@ terminal, never retried), `skipped` (could not be sent at all — no template fo
 the channel picked, no unsubscribe text, a missing variable — or cancelled).
 Ordered by contact id; the cursor is the last `contactId`.
 
+`notBefore` is set on a `pending` recipient a sending window is holding back:
+it will not be tried before then.
+
+Reasons worth knowing:
+
+| Reason | State | Meaning |
+| --- | --- | --- |
+| `deferred:<rule>` | `pending` | Only the sending-window rule `<rule>` held it back. It waits until `notBefore`, the next 15-minute mark when the window is open; nothing was sent and no message row exists. |
+| `no_sending_window` | `blocked` | Held back by a sending window that does not open in the next 7 days. |
+| `error:<message>` | `skipped` | Sending to it threw something unexpected three times (the first 200 characters of the error). |
+| `cancelled` | `skipped` | The campaign was cancelled before it was sent, deferred ones included. |
+| `no_consent`, `suppressed`, … | `blocked` | `send()` refused, as for any single send. Consent and suppression are never deferred. |
+
 ### How a run works
 
 1. At its time, `campaign.run` opens run *n* and **snapshots** the audience into
    recipients. Next Monday's run sends to next Monday's audience and never
    re-sends this Monday's. For a recurrence, run *n+1* is queued now, before
    anything is sent, so a long run cannot push the next one back.
-2. `campaign.batch` sends to `ceil(throttlePerMinute / 6)` pending recipients,
-   then queues itself ten seconds later until none are pending. The run is then
-   `done`, and the campaign `done` (one-shot, or a recurrence past `maxRuns` or
-   `endsAt`) or back to `scheduled`.
+2. `campaign.batch` takes pending recipients that are ready now and runs each
+   through the same check `send()` makes. One held back only by a sending
+   window (a quiet hour) is **deferred**, not blocked: it stays `pending` with
+   `notBefore` set and reason `deferred:<rule>`. Everyone else is sent, blocked
+   or skipped, up to `ceil(throttlePerMinute / 6)` per batch; deferring does not
+   count against that. The next batch is queued ten seconds later while anyone
+   is ready, or for the earliest `notBefore` when only deferred recipients are
+   left. When none are pending the run is `done`, and the campaign `done`
+   (one-shot, or a recurrence past `maxRuns` or `endsAt`) or back to
+   `scheduled`.
 3. Recipients are the retry unit: a batch that dies leaves its unsent
-   recipients pending for the next. A run that fails to expand is `failed`,
-   and so is the campaign; one recipient failing never fails a run.
+   recipients pending for the next. A recipient that throws something
+   unexpected three times is `skipped` as `error:…`. A run that fails to expand
+   is `failed`, and so is the campaign; one recipient failing never fails a run.
+4. `campaign.sweep` runs every five minutes and picks up runs whose job chain
+   died after pg-boss gave up on it: an `expanding` run idle for 10 minutes is
+   re-expanded, a `sending` run with ready recipients idle for 5 minutes gets a
+   new batch, and a `sending` run with nothing pending is finished. Each one
+   emits `campaign.run.recovered`. A run waiting on deferred recipients is left
+   alone.
 
 Messages a campaign sent carry `campaignRunId` (on `GET /v1/messages/:id` too).
 
@@ -972,7 +1001,9 @@ here was later rolled back.
 `campaign.created` · `campaign.scheduled` · `campaign.run.started` ·
 `campaign.run.finished` (payload: `runId`, `runNo`, `audienceSize`, `queued`,
 `blocked`, `skipped`) · `campaign.paused` · `campaign.resumed` ·
-`campaign.cancelled` · `campaign.failed` · `campaign.done`
+`campaign.cancelled` · `campaign.failed` · `campaign.done` ·
+`campaign.run.recovered` (payload: `runId`, `runNo`, `action` — one of
+`resume_expansion`, `enqueue_batch`, `finish`)
 
 A campaign's individual sends emit the usual `message.*` events; there is no
 per-recipient campaign event.

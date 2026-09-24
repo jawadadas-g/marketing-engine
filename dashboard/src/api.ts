@@ -252,6 +252,8 @@ export type CampaignRun = {
   blocked: number;
   skipped: number;
   pending: number;
+  /** The part of `pending` waiting on a sending window. */
+  deferred: number;
   error: string | null;
 };
 
@@ -289,6 +291,8 @@ export type RecipientRow = {
   telegram: string | null;
   state: string;
   reason: string | null;
+  /** Set while a pending recipient waits on a sending window. */
+  notBefore: string | null;
   messageId: string | null;
   channel: string | null;
   messageStatus: string | null;

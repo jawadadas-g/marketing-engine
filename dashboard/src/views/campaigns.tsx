@@ -212,6 +212,7 @@ export function CampaignDetailView({ id }: { id: string }) {
                   <th class="num">blocked</th>
                   <th class="num">skipped</th>
                   <th class="num">pending</th>
+                  <th class="num">deferred</th>
                 </tr>
               </thead>
               <tbody>
@@ -240,6 +241,7 @@ export function CampaignDetailView({ id }: { id: string }) {
                     <td class="num">{count(r.blocked)}</td>
                     <td class="num">{count(r.skipped)}</td>
                     <td class="num">{count(r.pending)}</td>
+                    <td class="num">{count(r.deferred)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -300,7 +302,16 @@ function Recipients({ campaignId, runId, state: filter }: { campaignId: string; 
                 <td>
                   <Badge value={r.state} />
                 </td>
-                <td>{r.reason ?? <span class="muted">—</span>}</td>
+                <td>
+                  {r.state === 'pending' && r.notBefore ? (
+                    <>
+                      deferred until <Time iso={r.notBefore} />
+                      {r.reason ? <div class="muted">{r.reason}</div> : null}
+                    </>
+                  ) : (
+                    (r.reason ?? <span class="muted">—</span>)
+                  )}
+                </td>
                 <td>
                   {r.messageId ? (
                     <a href={href(`/messages/${r.messageId}`)}>

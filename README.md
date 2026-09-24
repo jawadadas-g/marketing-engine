@@ -453,6 +453,11 @@ clock the sending window is checked against. To send later, use a campaign.
 | Wait when a tenant is at that limit | 60 s, then the run tries again | `BACKPRESSURE_SECONDS` in `src/modules/campaigns/worker.ts` |
 | Largest audience a run snapshots | 100,000 contacts | `MAX_AUDIENCE` in `src/modules/campaigns/audiences.ts` |
 | Contacts per import | 20,000 rows | `MAX_CONTACT_IMPORT_ROWS` in `src/modules/campaigns/contacts.ts` |
+| Step when searching for the next open sending window | 15 minutes | `WINDOW_STEP_MINUTES` in `src/modules/campaigns/window.ts` |
+| How far ahead that search looks | 7 days, then `blocked no_sending_window` | `WINDOW_HORIZON_DAYS`, same file |
+| Stalled-run sweep | every 5 minutes; expanding idle 10 min, sending idle 5 min | `SWEEP_CRON` and the thresholds in `src/modules/campaigns/sweep.ts` |
+| Unexpected errors before a recipient is skipped | 3 | `POISON_ATTEMPTS` in `src/modules/campaigns/worker.ts` |
+| pg-boss retries per campaign job | 3, with backoff | `JOB_RETRY_LIMIT` in `src/modules/campaigns/campaigns.ts` |
 
 **The concurrency limit of 5 is a number to revisit.** It is the crude
 backpressure that keeps one tenant from monopolising the queue: scheduling or
@@ -461,10 +466,14 @@ the tenant is at the limit waits a minute and tries again. It says nothing
 about total throughput across tenants, which is bounded only by the send
 worker. Change it once real tenants show what they need.
 
-**The sending window applies at send time.** A marketing SMS batch that reaches
-a Saudi recipient after 21:00 local is blocked by the region rule, and blocked
-is terminal. Schedule marketing campaigns well inside the window, and give a
-large audience enough throttle to finish before it closes.
+**A closed sending window defers, it does not drop.** A campaign batch that
+reaches a Saudi recipient after 21:00 local leaves them pending until 09:00 and
+carries on; the run stays `sending` until the deferred ones have gone. Only a
+window that does not open within 7 days blocks (`no_sending_window`). Consent
+and suppression are never deferred.
+
+The 15-minute step, the 7-day horizon and the 5-minute sweep are numbers to
+revisit once real campaigns show how they behave.
 
 ## Running it in production
 

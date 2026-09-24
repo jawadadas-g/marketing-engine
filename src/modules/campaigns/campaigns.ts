@@ -19,6 +19,12 @@ export const MAX_RUNNING_PER_TENANT = 5;
 /** A batch job's spacing. Each batch sends a tenth of a minute's allowance. */
 export const BATCH_INTERVAL_SECONDS = 10;
 
+/**
+ * pg-boss attempts per campaign job before it gives up. A chain that dies
+ * anyway is picked up by `campaign.sweep`.
+ */
+export const JOB_RETRY_LIMIT = 3;
+
 export type Recurrence = { cron: string; endsAt?: string | undefined; maxRuns?: number | undefined };
 
 export type CampaignStatus =
@@ -62,6 +68,7 @@ export type RunRow = {
   blocked: number;
   skipped: number;
   error: string | null;
+  last_progress_at: Date;
 };
 
 export type CampaignInput = {
@@ -235,6 +242,8 @@ export async function enqueueRun(
     {
       startAfterSeconds: Math.max(0, Math.ceil((at.getTime() - Date.now()) / 1000)),
       singletonKey: `campaign:${campaign.id}:${runNo}`,
+      retryLimit: JOB_RETRY_LIMIT,
+      retryBackoff: true,
     },
   );
 }
@@ -249,7 +258,12 @@ export async function enqueueBatch(
     tx,
     CAMPAIGN_BATCH_JOB,
     { tenantId: run.tenant_id, runId: run.id },
-    { startAfterSeconds, singletonKey: `campaign-run:${run.id}` },
+    {
+      startAfterSeconds,
+      singletonKey: `campaign-run:${run.id}`,
+      retryLimit: JOB_RETRY_LIMIT,
+      retryBackoff: true,
+    },
   );
 }
 
@@ -465,15 +479,14 @@ export async function listCampaigns(
   return rows.map((campaign) => ({ campaign, lastRun: last.get(campaign.id) ?? null }));
 }
 
-export type RunCounts = RunRow & { pending: number };
+/** A run with its live counts. `deferred` is the part of `pending` waiting on a sending window. */
+export type RunCounts = RunRow & { pending: number; deferred: number };
 
 /** The newest run of each campaign, with its pending count. */
 export async function latestRuns(tx: Tx, campaignIds: string[]): Promise<Map<string, RunCounts>> {
   if (campaignIds.length === 0) return new Map();
   const rows = await tx<RunCounts[]>`
-    select distinct on (r.campaign_id) r.*,
-           (select count(*)::int from campaign_recipients p
-            where p.run_id = r.id and p.state = 'pending') as pending
+    select distinct on (r.campaign_id) r.*, ${pendingCounts(tx)}
     from campaign_runs r
     where r.campaign_id = any(${campaignIds}::uuid[])
     order by r.campaign_id, r.run_no desc
@@ -481,11 +494,18 @@ export async function latestRuns(tx: Tx, campaignIds: string[]): Promise<Map<str
   return new Map(rows.map((r) => [r.campaign_id, r]));
 }
 
+function pendingCounts(tx: Tx) {
+  return tx`
+    (select count(*)::int from campaign_recipients p
+     where p.run_id = r.id and p.state = 'pending') as pending,
+    (select count(*)::int from campaign_recipients p
+     where p.run_id = r.id and p.state = 'pending' and p.not_before > now()) as deferred
+  `;
+}
+
 export async function listRuns(tx: Tx, campaignId: string): Promise<RunCounts[]> {
   return tx<RunCounts[]>`
-    select r.*,
-           (select count(*)::int from campaign_recipients p
-            where p.run_id = r.id and p.state = 'pending') as pending
+    select r.*, ${pendingCounts(tx)}
     from campaign_runs r
     where r.campaign_id = ${campaignId}
     order by r.run_no desc
@@ -500,6 +520,8 @@ export type RecipientView = {
   telegram: string | null;
   state: 'pending' | 'queued' | 'blocked' | 'skipped';
   reason: string | null;
+  /** A pending recipient waiting on a sending window: not tried before this. */
+  notBefore: Date | null;
   messageId: string | null;
   message: {
     channel: string;
@@ -528,6 +550,7 @@ export async function listRecipients(
       contact_id: string;
       state: RecipientView['state'];
       reason: string | null;
+      not_before: Date | null;
       message_id: string | null;
       name: string | null;
       phone: string | null;
@@ -535,7 +558,8 @@ export async function listRecipients(
       telegram: string | null;
     }[]
   >`
-    select r.contact_id, r.state, r.reason, r.message_id, c.name, c.phone, c.email, c.telegram
+    select r.contact_id, r.state, r.reason, r.not_before, r.message_id,
+           c.name, c.phone, c.email, c.telegram
     from campaign_recipients r
     join contacts c on c.id = r.contact_id
     where r.run_id = ${input.runId}
@@ -560,6 +584,7 @@ export async function listRecipients(
       telegram: r.telegram,
       state: r.state,
       reason: r.reason,
+      notBefore: r.not_before,
       messageId: r.message_id,
       message: message
         ? {

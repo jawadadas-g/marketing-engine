@@ -364,6 +364,9 @@ export async function previewAudience(
 /**
  * Is anyone in this audience sendable? Stops at the first who is, so an
  * audience with somebody reachable near the front answers at once.
+ *
+ * Someone held back only by a sending window counts: a campaign defers them
+ * until the window opens rather than dropping them.
  */
 export async function anySendable(
   tx: Tx,
@@ -390,7 +393,7 @@ export async function anySendable(
         ...(input.channel ? { channel: input.channel } : {}),
         ...(input.at ? { at: input.at } : {}),
       });
-      if (verdict.allowed) return true;
+      if (verdict.allowed || verdict.window) return true;
     }
   }
   return false;

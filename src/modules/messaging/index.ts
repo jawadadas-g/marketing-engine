@@ -6,11 +6,12 @@ import { enqueue } from '../../jobs/index.js';
 import { adapterFor, type ProviderConfig } from './adapters/index.js';
 import { MessagingError } from './errors.js';
 import { findByIdentifier } from '../../spine/registry/index.js';
-import { addressFor, selectChannel, type ContactInput } from './selection.js';
+import { addressFor, selectChannel, type ContactInput, type WindowBlock } from './selection.js';
 import { assertParses, render } from './templates.js';
 
 export type { ContactInput } from './selection.js';
 export { addressFor } from './selection.js';
+export type { WindowBlock } from './selection.js';
 
 export const SEND_JOB = 'message.send';
 
@@ -402,7 +403,7 @@ export async function preflight(
     channel?: Channel | undefined;
     at?: Date | undefined;
   },
-): Promise<{ allowed: true; channel: Channel } | { allowed: false; reason: string }> {
+): Promise<PreflightResult> {
   const configured = new Set((await listChannelConfigs(tx, input.tenantId)).keys());
 
   if (input.channel) {
@@ -419,10 +420,26 @@ export async function preflight(
     ...(input.at ? { at: input.at } : {}),
   });
 
-  return selection.chosen
-    ? { allowed: true, channel: selection.chosen.channel }
-    : { allowed: false, reason: blockedReason(selection.reasons) };
+  if (selection.chosen) return { allowed: true, channel: selection.chosen.channel };
+  return {
+    allowed: false,
+    reason: blockedReason(selection.reasons),
+    ...(selection.windowBlock ? { window: selection.windowBlock } : {}),
+  };
 }
+
+export type PreflightResult =
+  | { allowed: true; channel: Channel }
+  | {
+      allowed: false;
+      reason: string;
+      /**
+       * Present when a channel passed suppression and consent and only a
+       * sending_window rule held it back: the same intent may go out later.
+       * Absent for every block that waiting would not fix.
+       */
+      window?: WindowBlock;
+    };
 
 /** The channels this tenant has a provider for. */
 export async function configuredChannels(tx: Tx, tenantId: string): Promise<Channel[]> {
