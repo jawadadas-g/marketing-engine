@@ -3,6 +3,7 @@ import { streamSSE } from 'hono/streaming';
 import { z } from 'zod';
 import { replay } from '../../../modules/webhooks/index.js';
 import { db } from '../../../db/client.js';
+import * as campaignFeeds from './campaigns.js';
 import * as feeds from './feeds.js';
 import { jobs, oneJob, retryJob, schedules } from './jobs.js';
 import { metrics } from './metrics.js';
@@ -202,6 +203,37 @@ operator.get('/internal/companies', async (c) => {
     ...rest,
     ...(onPlatform ? { onPlatform: onPlatform === 'true' } : {}),
   });
+  return c.json(page(items, q.data.limit));
+});
+
+operator.get('/internal/campaigns', async (c) => {
+  const q = listQuery
+    .extend({ tenantId: z.string().uuid().optional(), status: z.string().max(30).optional() })
+    .safeParse(c.req.query());
+  if (!q.success) return c.json({ error: 'invalid query', detail: q.error.issues }, 400);
+
+  const items = await campaignFeeds.campaigns(q.data);
+  return c.json(page(items, q.data.limit));
+});
+
+operator.get('/internal/campaigns/:id', async (c) => {
+  const id = z.string().uuid().safeParse(c.req.param('id'));
+  if (!id.success) return c.json({ error: 'not found' }, 404);
+
+  const detail = await campaignFeeds.oneCampaign(id.data);
+  return detail ? c.json(detail) : c.json({ error: 'not found' }, 404);
+});
+
+operator.get('/internal/campaigns/:id/runs/:runId/recipients', async (c) => {
+  const id = z.string().uuid().safeParse(c.req.param('id'));
+  const runId = z.string().uuid().safeParse(c.req.param('runId'));
+  if (!id.success || !runId.success) return c.json({ error: 'not found' }, 404);
+  const q = listQuery
+    .extend({ state: z.enum(['pending', 'queued', 'blocked', 'skipped']).optional() })
+    .safeParse(c.req.query());
+  if (!q.success) return c.json({ error: 'invalid query', detail: q.error.issues }, 400);
+
+  const items = await campaignFeeds.recipients({ campaignId: id.data, runId: runId.data, ...q.data });
   return c.json(page(items, q.data.limit));
 });
 

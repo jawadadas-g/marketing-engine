@@ -592,4 +592,44 @@ describe('campaigns', () => {
     }, tokenB);
     expect(aimed.status).toBe(404);
   });
+
+  it('shows the operator every campaign, its runs and recipients', async () => {
+    const ids = [await contact(PHONES[0]!, { consent: true }), await contact(PHONES[1]!)];
+    const id = await campaign(await staticAudience(ids), { throttlePerMinute: 6 });
+    await call('POST', `/v1/campaigns/${id}/schedule`);
+    await execute((await createdJobs('campaign.run'))[0]!);
+    await execute((await createdJobs('campaign.batch'))[0]!);
+
+    const internal = async (path: string) => {
+      const res = await app.fetch(
+        new Request(`http://engine.test${path}`, {
+          headers: { 'X-Internal-Token': process.env.INTERNAL_TOKEN! },
+        }),
+      );
+      return (await res.json()) as Record<string, any>;
+    };
+
+    // Mid-run: one recipient done, one pending.
+    const overview = await internal('/internal/overview?window=24h');
+    expect(overview['campaigns']).toEqual({
+      scheduled: 0,
+      running: 1,
+      recipientsPending: 1,
+      sentInWindow: expect.any(Number),
+      blockedInWindow: expect.any(Number),
+    });
+    expect(overview['campaigns'].sentInWindow + overview['campaigns'].blockedInWindow).toBe(1);
+
+    const list = await internal(`/internal/campaigns?tenantId=${TENANT_A}&status=running`);
+    expect(list['items']).toHaveLength(1);
+    expect(list['items'][0]).toMatchObject({ id, tenantName: 'Tenant A', status: 'running' });
+    expect(list['items'][0].lastRun).toMatchObject({ audienceSize: 2, pending: 1 });
+
+    const detail = await internal(`/internal/campaigns/${id}`);
+    expect(detail['runs']).toHaveLength(1);
+    const runId = detail['runs'][0].id as string;
+
+    const pending = await internal(`/internal/campaigns/${id}/runs/${runId}/recipients?state=pending`);
+    expect(pending['items']).toHaveLength(1);
+  });
 });
