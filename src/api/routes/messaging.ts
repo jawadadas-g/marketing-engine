@@ -165,6 +165,7 @@ function serialise(row: MessageRow) {
     status: row.status,
     fallbackChannels: row.fallback_channels,
     parentMessageId: row.parent_message_id,
+    campaignRunId: row.campaign_run_id,
     provider: row.provider,
     providerMessageId: row.provider_message_id,
     blockedReason: row.blocked_reason,

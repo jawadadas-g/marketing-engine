@@ -39,6 +39,8 @@ export type EnqueueOptions = {
   retryLimit?: number;
   retryBackoff?: boolean;
   startAfterSeconds?: number;
+  /** On a `short` queue, a second job with the same key is dropped while the first waits. */
+  singletonKey?: string;
 };
 
 /**
@@ -65,6 +67,7 @@ export async function enqueue(
       ...(options.startAfterSeconds !== undefined
         ? { startAfter: options.startAfterSeconds }
         : {}),
+      ...(options.singletonKey !== undefined ? { singletonKey: options.singletonKey } : {}),
     }),
   );
 }

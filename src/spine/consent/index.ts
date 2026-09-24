@@ -44,14 +44,20 @@ export async function record(
     status: ConsentStatus;
     source: string;
     defaultCountry?: string | undefined;
+    /**
+     * When the consent was actually given, if that was before now: an import
+     * carrying the date on the signed agreement. Defaults to now.
+     */
+    recordedAt?: Date | undefined;
   },
 ): Promise<ConsentRow> {
   const contact = normalize(input);
 
   const [row] = await tx<ConsentRow[]>`
-    insert into consent (tenant_id, channel, address, purpose, status, source)
+    insert into consent (tenant_id, channel, address, purpose, status, source, recorded_at)
     values (${input.tenantId}, ${contact.channel}, ${contact.address},
-            ${input.purpose}, ${input.status}, ${input.source})
+            ${input.purpose}, ${input.status}, ${input.source},
+            ${input.recordedAt ?? tx`now()`})
     returning *
   `;
   if (!row) throw new Error('consent.record inserted no row');
@@ -61,7 +67,12 @@ export async function record(
     type: input.status === 'granted' ? 'consent.granted' : 'consent.revoked',
     subjectType: 'contact',
     subjectId: `${contact.channel}:${contact.address}`,
-    payload: { purpose: input.purpose, source: input.source, region: contact.region },
+    payload: {
+      purpose: input.purpose,
+      source: input.source,
+      region: contact.region,
+      ...(input.recordedAt ? { recordedAt: input.recordedAt.toISOString() } : {}),
+    },
   });
 
   return row;
