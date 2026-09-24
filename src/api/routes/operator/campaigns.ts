@@ -35,7 +35,9 @@ const runColumns = () => db()`
   r.id::text as id, r.run_no as "runNo", r.status, r.started_at as "startedAt",
   r.finished_at as "finishedAt", r.audience_size as "audienceSize",
   r.queued, r.blocked, r.skipped, r.error,
-  (select count(*)::int from campaign_recipients p where p.run_id = r.id and p.state = 'pending') as pending
+  (select count(*)::int from campaign_recipients p where p.run_id = r.id and p.state = 'pending') as pending,
+  (select count(*)::int from campaign_recipients p
+   where p.run_id = r.id and p.state = 'pending' and p.not_before > now()) as deferred
 `;
 
 export async function campaigns(input: {
@@ -101,7 +103,7 @@ export async function recipients(input: {
   const sql = db();
   return sql<Record<string, unknown>[]>`
     select r.contact_id::text as id, c.name, c.phone, c.email, c.telegram,
-           r.state, r.reason, r.message_id::text as "messageId",
+           r.state, r.reason, r.not_before as "notBefore", r.message_id::text as "messageId",
            m.channel, m.status as "messageStatus", m.blocked_reason as "messageBlockedReason",
            m.error as "messageError", m.updated_at as "messageUpdatedAt"
     from campaign_recipients r

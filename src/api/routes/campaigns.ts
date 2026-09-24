@@ -455,6 +455,7 @@ export function serialiseRun(row: RunCounts) {
     blocked: row.blocked,
     skipped: row.skipped,
     pending: row.pending,
+    deferred: row.deferred,
     error: row.error,
   };
 }
