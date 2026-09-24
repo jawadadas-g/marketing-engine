@@ -50,6 +50,9 @@ const sendBody = z
     template: z.string().min(1).max(200),
     variables: z.record(z.unknown()).optional(),
     defaultCountry: z.string().length(2).optional(),
+    /** The clock the sending window and rules are evaluated at. Not a schedule. */
+    evaluateAt: z.coerce.date().optional(),
+    // The old name for evaluateAt. Accepted for one release, then removed.
     at: z.coerce.date().optional(),
   })
   .refine((b) => b.contact ?? (b.channel && b.address), {
@@ -113,14 +116,26 @@ messaging.put('/v1/templates/:name', async (c) => {
   return c.json({ template: { name: row.name, channel: row.channel, body: row.body } });
 });
 
+/**
+ * Send one intent now. `evaluateAt` only moves the clock the sending window and
+ * rules are checked against; it is not a schedule.
+ *
+ * This does not delay the send; use campaigns for that.
+ */
 messaging.post('/v1/messages', async (c) => {
   const parsed = sendBody.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: 'invalid body', detail: parsed.error.issues }, 400);
 
   const tenantId = c.get('tenantId');
-  const { address: _legacy, contact: _contact, ...rest } = parsed.data;
+  const { address: _legacy, contact: _contact, evaluateAt, at, ...rest } = parsed.data;
+  const clock = evaluateAt ?? at;
   const row = await withTenant(tenantId, (tx) =>
-    send(tx, { tenantId, ...rest, contact: contactOf(parsed.data) }),
+    send(tx, {
+      tenantId,
+      ...rest,
+      contact: contactOf(parsed.data),
+      ...(clock ? { at: clock } : {}),
+    }),
   );
 
   // 202 when it is on the queue, 200 when can_send refused and nothing will go.

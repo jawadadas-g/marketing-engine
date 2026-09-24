@@ -139,7 +139,7 @@ An intent, not a channel command.
   "template": "order_update",
   "variables": { "order": "A-1043" },
   "defaultCountry": "SA",
-  "at": "2026-09-21T10:00:00Z"
+  "evaluateAt": "2026-09-21T10:00:00Z"
 }
 ```
 
@@ -147,7 +147,12 @@ Name a `channel` and that is the channel. Leave it out and the engine picks: it
 asks suppression and consent of every channel the contact has both an address
 and a configured provider for, lets a `channel_selection` rule order what is
 left, and applies the sending window to the one it picks. The rest become the
-fallback order. `at` pins the clock, for testing.
+fallback order. `evaluateAt` pins the clock the sending window and rules are
+checked against, for testing. **It does not delay the send**: the message is
+queued now either way. To send later, use a campaign.
+
+`at` is the deprecated name for `evaluateAt`, accepted for one release and then
+removed. When both are given, `evaluateAt` wins.
 
 The older `{ "channel", "address" }` pair is still accepted and folded into a
 contact. It will be removed.

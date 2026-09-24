@@ -237,6 +237,31 @@ describe('send', () => {
     expect(message.body).toBe('Hello Sam\nReply STOP to unsubscribe');
   });
 
+  it('evaluates the sending window at evaluateAt, and still accepts the old at', async () => {
+    await grantConsent();
+    await configureFakeChannel({ unsubscribeText: 'Reply STOP to unsubscribe' });
+    const AT_03_RIYADH = '2026-03-02T00:00:00.000Z';
+    const intent = {
+      channel: 'sms',
+      address: PHONE,
+      purpose: 'marketing',
+      template: 'hello',
+      variables: { name: 'Sam' },
+    };
+
+    const night = await postMessage({ ...intent, evaluateAt: AT_03_RIYADH });
+    expect(((await night.json()) as { message: Message }).message.status).toBe('blocked');
+
+    const legacy = await postMessage({ ...intent, at: AT_03_RIYADH });
+    expect(((await legacy.json()) as { message: Message }).message.status).toBe('blocked');
+
+    // Both given: the new name wins.
+    const day = await postMessage({ ...intent, evaluateAt: AT_10_RIYADH, at: AT_03_RIYADH });
+    expect(day.status).toBe(202);
+    // Queued now, not at evaluateAt: it moves the clock, it does not schedule.
+    expect(await sendJobCount()).toBe(1);
+  });
+
   it('refuses a send when the channel has no provider configured', async () => {
     await db()`delete from tenant_channel_configs`;
     const res = await postMessage({
