@@ -430,6 +430,257 @@ is wrong.
 
 ---
 
+## Contacts
+
+A stored contact: any of a phone, email and Telegram id, with a name, locale,
+free `attributes` and an optional link to a company. Addresses are stored
+normalised and are unique per tenant, so the same number cannot land twice.
+Storing a contact never records consent.
+
+### `POST /v1/contacts` — tenant JWT
+
+```json
+{ "phone": "+9665…", "email": "a@b.co", "telegram": "123456789",
+  "name": "Amal", "locale": "ar-SA", "attributes": { "tags": ["vip"] },
+  "companyId": "…", "defaultCountry": "SA" }
+```
+
+Upserts: a contact that already has any of these addresses is filled in
+(given fields overwrite, `attributes` merge) rather than duplicated. Without a
+`companyId`, the contact is linked to whichever registry company owns its phone
+or email, if one does.
+
+→ `201 { "contact", "created": true }`, `200` when an existing one was updated.
+`409 contact_ambiguous` with `contactIds` when the addresses belong to two
+different contacts — the engine never merges contacts on its own. Emits
+`contact.upserted`.
+
+### `POST /v1/contacts/import?defaultCountry=SA` — tenant JWT, `Content-Type: text/csv`
+
+The header must be exactly:
+
+```
+phone,email,telegram,name,company_cr,attributes,consent_channels,consent_purpose,consent_source,consent_date
+```
+
+- `attributes` is a JSON object, `consent_channels` is `;`-separated
+  (`sms;whatsapp`), `consent_purpose` is `marketing` or `transactional`,
+  `consent_source` describes the evidence ("signed supply agreement
+  2026-03-11"), `consent_date` is an ISO date, not in the future.
+- **A row with the consent columns filled records consent** for each channel,
+  with that source, dated `consent_date`. **A row without them imports the
+  contact and records nothing**: marketing to it stays blocked until consent
+  arrives. Consent is never inferred from having an address. A row with only
+  some of the four columns is rejected.
+- `company_cr` links the contact to the registry company holding that CR, if
+  there is one.
+
+Up to 20,000 rows, in batches of 500 that each commit on their own, so one bad
+row or batch cannot roll back the file.
+
+→ `200 { "rows", "contactsCreated", "contactsUpdated", "consentRecorded",
+"rejected": [{ "row": 7, "reason": "…" }] }`. Row numbers count the header as
+row 1.
+
+### `GET /v1/contacts?q=&companyId=&limit=&cursor=` · `GET /v1/contacts/:id` · `PATCH /v1/contacts/:id`
+
+`q` matches name, phone, email or Telegram id. Lists are newest first, paged by
+`cursor` (the last row's `id`). `PATCH` takes the same fields as `POST`;
+an address another contact already has is `409 contact_conflict`.
+
+---
+
+## Audiences
+
+A named group of contacts, of one of two kinds:
+
+- **`static`** — an explicit member list.
+- **`search`** — a definition resolved every time it is used:
+
+  ```json
+  { "finderQuery": { "buys": ["diesel"], "city": "Riyadh" },
+    "contactFilter": { "hasChannel": ["sms", "whatsapp"], "tags": ["vip"], "companyIds": ["…"] } }
+  ```
+
+  The active finder runs (the same one as `/v1/discovery/search`, and logged the
+  same way), and the audience is this tenant's contacts linked to the companies
+  it returns. `hasChannel` keeps contacts with an address for any of those
+  channels; `tags` matches `attributes.tags`. A company that joins the
+  marketplace drops out, as it does from search.
+
+### `POST /v1/audiences` — tenant JWT
+
+`{ "name": "diesel buyers", "kind": "static" }` or
+`{ "name": "…", "kind": "search", "definition": {…} }`. Names are unique per
+tenant (`409 audience_exists`).
+
+### `GET /v1/audiences` · `GET /v1/audiences/:id` · `PATCH /v1/audiences/:id` · `DELETE /v1/audiences/:id`
+
+`members` is the member count for a static audience, `null` for a search.
+`PATCH` takes `name` and, for a search audience, `definition`. `DELETE` is
+`409 audience_in_use` while a campaign points at it.
+
+### `POST /v1/audiences/:id/members` — tenant JWT
+
+`{ "contactIds": ["…"] }` → `{ "added", "unknown": [ids this tenant does not have] }`.
+
+Or `Content-Type: text/csv` with any of the columns `phone,email,telegram,name`
+(and `?defaultCountry=`): each row is upserted as a contact first, so an address
+nobody has stored becomes a contact, **with no consent**.
+→ `{ "added", "contactsCreated", "rejected": [{ "row", "reason" }] }`.
+
+Static audiences only (`400 not_static`).
+
+### `DELETE /v1/audiences/:id/members/:contactId`
+
+→ `204`, or `404`.
+
+### `POST /v1/audiences/:id/preview?limit=20&purpose=marketing&channel=&evaluateAt=` — tenant JWT
+
+**The honest answer to "who will actually get this".** Show it before
+scheduling anything.
+
+```json
+{
+  "total": 3, "sampled": 3, "sendable": 1,
+  "contacts": [
+    { "id": "…", "name": "Amal", "phone": "+1415…", "email": null, "telegram": null,
+      "allowed": true, "channel": "sms", "reason": null },
+    { "id": "…", "allowed": false, "channel": null, "reason": "suppressed" },
+    { "id": "…", "allowed": false, "channel": null, "reason": "no_consent" }
+  ]
+}
+```
+
+`total` is the whole audience; `contacts` are the first `limit` of it (by
+contact id), each with the verdict `send()` would give for `purpose` on its best
+channel — the same consent, suppression, rules and channel selection, with
+nothing written. `sendable` counts the allowed ones **among those sampled**.
+`channel` pins the channel as a campaign with a channel would. `evaluateAt`
+judges the sending window at another time, e.g. when the campaign will run.
+
+---
+
+## Campaigns
+
+A campaign is a scheduler and a recipient list, nothing more. Every recipient
+goes through `messaging.send()` exactly as `POST /v1/messages` does: consent,
+rules, channel selection, templates, fallback and the event log all apply.
+
+### `POST /v1/campaigns` — tenant JWT
+
+```json
+{
+  "name": "Monday diesel offer",
+  "audienceId": "…",
+  "template": "diesel_offer",
+  "channel": "whatsapp",
+  "purpose": "marketing",
+  "variables": { "offer": "5%" },
+  "scheduledAt": "2026-10-01T07:00:00Z",
+  "recurrence": { "cron": "0 10 * * 1", "endsAt": "2026-12-31T00:00:00Z", "maxRuns": 12 },
+  "timezone": "Asia/Riyadh",
+  "throttlePerMinute": 60
+}
+```
+
+- `channel` null or absent: selection picks per recipient.
+- `scheduledAt` absent on a one-shot: runs as soon as it is scheduled. On a
+  recurrence it means "not before".
+- `recurrence.cron` is a standard five-field cron (numbers, `*`, lists,
+  ranges, steps) read in `timezone`. `null` is a one-shot.
+- `throttlePerMinute` is 1..600, default 60 — a per-campaign send rate, because
+  a supplier firing 5,000 WhatsApp messages in a minute gets their number
+  flagged.
+- The template gets the campaign's `variables` plus `contact` (`id`, `name`,
+  `locale`, `phone`, `email`, `telegram`, `attributes`, and `address`, the one
+  it went to) and `company` (`id`, `name`, `country`, or null).
+
+Created as a `draft`. Errors: `400 template_not_found` (for the named channel,
+or — with no channel — for any channel the tenant has a provider for, listed in
+`missing`), `400 invalid_cron`, `400 invalid_timezone`, `400 scheduled_at_past`,
+`404 audience_not_found`. Emits `campaign.created`.
+
+### `GET /v1/campaigns?status=` · `GET /v1/campaigns/:id` · `PATCH /v1/campaigns/:id`
+
+Each campaign carries `status`, `nextRunAt` and `lastRun` (the newest run's
+counts, below). `PATCH` takes any create field and is draft-only
+(`409 not_draft`).
+
+Statuses: `draft`, `scheduled`, `running`, `paused`, `done`, `cancelled`,
+`failed`.
+
+### `POST /v1/campaigns/:id/schedule`
+
+`draft` → `scheduled`, with the first run on the queue for `scheduledAt` (or
+now), or for the next cron time.
+
+- `400 audience_empty` — a `marketing` campaign whose audience has nobody
+  sendable at the time it would run. It refuses rather than running and
+  blocking everyone; preview the audience to see why.
+- `409 too_many_running` — the tenant already has 5 campaigns `running`.
+- `400 scheduled_at_past`, `400 recurrence_never_fires`, `409 not_draft`.
+
+### `POST /v1/campaigns/:id/pause` · `/resume` · `/cancel`
+
+- **pause**: `scheduled` or `running` → `paused`. Nothing more is sent; pending
+  recipients stay pending.
+- **resume**: `paused` → `running` if a run was in progress (its batches pick
+  up where they stopped), else `scheduled`.
+- **cancel**: any live state → `cancelled`. The run in progress is `cancelled`
+  and its pending recipients `skipped` with reason `cancelled`. Messages already
+  queued are real sends and are not recalled.
+
+A wrong state is `409 invalid_state`.
+
+### `GET /v1/campaigns/:id/runs`
+
+```json
+{ "items": [{ "id": "…", "runNo": 2, "status": "sending",
+              "startedAt": "…", "finishedAt": null,
+              "audienceSize": 500, "queued": 140, "blocked": 18, "skipped": 2,
+              "pending": 340, "error": null }] }
+```
+
+Newest first. Run statuses: `expanding`, `sending`, `done`, `cancelled`,
+`failed`. The counts update as the run sends.
+
+### `GET /v1/campaigns/:id/runs/:runId/recipients?state=&limit=&cursor=`
+
+Who got it, who didn't, and why, in one call:
+
+```json
+{ "items": [{ "contactId": "…", "name": "…", "phone": "…", "email": null, "telegram": null,
+              "state": "blocked", "reason": "no_consent", "messageId": "…",
+              "message": { "channel": "sms", "status": "blocked", "blockedReason": "no_channel",
+                           "error": null, "updatedAt": "…" } }],
+  "nextCursor": null }
+```
+
+States: `pending` (not sent yet), `queued` (a message went on the queue;
+`message.status` says how it has fared since), `blocked` (`send()` refused;
+terminal, never retried), `skipped` (could not be sent at all — no template for
+the channel picked, no unsubscribe text, a missing variable — or cancelled).
+Ordered by contact id; the cursor is the last `contactId`.
+
+### How a run works
+
+1. At its time, `campaign.run` opens run *n* and **snapshots** the audience into
+   recipients. Next Monday's run sends to next Monday's audience and never
+   re-sends this Monday's. For a recurrence, run *n+1* is queued now, before
+   anything is sent, so a long run cannot push the next one back.
+2. `campaign.batch` sends to `ceil(throttlePerMinute / 6)` pending recipients,
+   then queues itself ten seconds later until none are pending. The run is then
+   `done`, and the campaign `done` (one-shot, or a recurrence past `maxRuns` or
+   `endsAt`) or back to `scheduled`.
+3. Recipients are the retry unit: a batch that dies leaves its unsent
+   recipients pending for the next. A run that fails to expand is `failed`,
+   and so is the campaign; one recipient failing never fails a run.
+
+Messages a campaign sent carry `campaignRunId` (on `GET /v1/messages/:id` too).
+
+---
+
 ## Events
 
 ### `POST /v1/events` — tenant JWT
@@ -622,13 +873,18 @@ Everything a dashboard's front page needs, in one call:
                 "webhookFailures": 0 }],
   "webhooks": { "pending": 1, "failed": 2 },
   "reservations": { "open": 2, "expiringWithin15m": 1 },
-  "discovery": { "searches": 33, "invitesFromSearch": 4 }
+  "discovery": { "searches": 33, "invitesFromSearch": 4 },
+  "campaigns": { "scheduled": 2, "running": 1, "recipientsPending": 340,
+                 "sentInWindow": 1200, "blockedInWindow": 45 }
 }
 ```
 
 `blockedReasons` counts the reason *per channel* from the `message.blocked`
 event payload, not the `blocked_reason` column — that column says `no_channel`
 for almost every block and would tell you nothing.
+
+`campaigns.sentInWindow` and `blockedInWindow` count campaign messages created
+in the window; `recipientsPending` is across every run still in progress.
 
 `queue` comes from pg-boss's own tables; `completedInWindow` reads its archive
 too, because finished jobs move there.
@@ -651,6 +907,9 @@ secret) and counts over 24h, 7d and 30d.
 | `GET /internal/invites` | `tenantId`, `status` |
 | `GET /internal/companies` | `q` (trigram on the normalised name), `country`, `onPlatform` |
 | `GET /internal/webhook-deliveries` | `status`, `tenantId`, `endpointId` |
+| `GET /internal/campaigns` | `tenantId`, `status`; each row has `tenantName`, `audienceName`, `nextRunAt` and `lastRun` with its counts |
+| `GET /internal/campaigns/:id` | `{ campaign, runs }`, every run with its counts |
+| `GET /internal/campaigns/:id/runs/:runId/recipients` | `state`; each recipient with its message's channel and status. Ordered by contact id |
 
 Each message row carries a `timeline` of its own events in order, so a list
 answers "what happened to this?" without opening it.
@@ -709,4 +968,11 @@ here was later rolled back.
 `message.replied` · `message.fallback` · `company.created` · `company.updated` ·
 `company.merged` · `company.profiled` · `discovery.searched` · `invite.sent` ·
 `invite.accepted` · `promo.created` · `promo.reserved` · `promo.settled` ·
-`promo.released`
+`promo.released` · `contact.upserted` · `audience.saved` · `audience.deleted` ·
+`campaign.created` · `campaign.scheduled` · `campaign.run.started` ·
+`campaign.run.finished` (payload: `runId`, `runNo`, `audienceSize`, `queued`,
+`blocked`, `skipped`) · `campaign.paused` · `campaign.resumed` ·
+`campaign.cancelled` · `campaign.failed` · `campaign.done`
+
+A campaign's individual sends emit the usual `message.*` events; there is no
+per-recipient campaign event.

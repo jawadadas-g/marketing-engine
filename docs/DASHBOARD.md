@@ -29,7 +29,7 @@ browser**: the internal token opens every tenant's data.
   tenant's own `GET` returns them, and webhook endpoints never include their
   signing secret.
 
-## The six views
+## The views
 
 ### 1. Overview
 
@@ -110,6 +110,18 @@ before a delivery is marked `failed`.
 
 **`POST /internal/webhook-deliveries/:id/replay`** queues it again, for any
 tenant including the platform endpoint.
+
+### 7. Campaigns
+
+**`GET /internal/campaigns?tenantId&status`**, polled every 5 seconds, and
+**`GET /internal/campaigns/:id`** for one campaign with every run.
+
+The list shows each campaign's status, `nextRunAt`, and the latest run's
+counts. The detail shows the run history with a progress bar — the run's
+`queued + blocked + skipped` over its `audienceSize`, both from the API — and,
+for the selected run, **`GET /internal/campaigns/:id/runs/:runId/recipients?state=`**:
+who got it, who did not, and why. The overview's `campaigns` section is the
+card on the front page.
 
 ## Charts
 
