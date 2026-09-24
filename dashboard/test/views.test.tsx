@@ -32,6 +32,9 @@ function mockApi(overrides: Record<string, unknown> = {}) {
         retryJob: () => ok({ retried: 'x' }),
         schedules: () => ok({ schedules: fixtures.schedules }),
         metrics: () => ok(fixtures.metrics),
+        campaigns: () => ok({ items: fixtures.campaigns, nextCursor: null }),
+        campaign: () => ok(fixtures.campaignDetail),
+        recipients: () => ok({ items: fixtures.recipients, nextCursor: null }),
         streamUrl: () => '/api/stream',
         ...overrides,
       },
@@ -94,6 +97,13 @@ describe('views render', () => {
     expect(render(<CompaniesView q="" country="" onFilters={() => {}} />)).toContain('Companies');
   });
 
+  it('campaigns', async () => {
+    mockApi();
+    const { CampaignsView, CampaignDetailView } = await import('../src/views/campaigns.js');
+    expect(render(<CampaignsView tenantId="" status="" onFilters={() => {}} />)).toContain('Campaigns');
+    expect(render(<CampaignDetailView id="33333333-3333-3333-3333-333333333333" />)).toBeTruthy();
+  });
+
   it('metrics', async () => {
     mockApi();
     const { MetricsView } = await import('../src/views/metrics.js');
@@ -124,6 +134,20 @@ describe('the chart', () => {
     const html = render(<LineChart series={many} label="test" />);
     expect((html.match(/<path/g) ?? []).length).toBe(8);
     expect(html).toContain('more series not drawn');
+  });
+});
+
+describe('progress', () => {
+  it('fills to the share the engine reported, and says the numbers', async () => {
+    const { Progress } = await import('../src/ui/index.js');
+    const html = render(<Progress done={160} total={500} />);
+    expect(html).toContain('width:32%');
+    expect(html).toContain('160 / 500');
+  });
+
+  it('shows a dash before the audience is known', async () => {
+    const { Progress } = await import('../src/ui/index.js');
+    expect(render(<Progress done={0} total={null} />)).toContain('—');
   });
 });
 

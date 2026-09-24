@@ -75,6 +75,22 @@ function Sections({ data }: { data: Overview }) {
         </div>
       </Card>
 
+      <Card title="campaigns">
+        <div class="stat-row">
+          <Stat
+            label="running"
+            value={<a href={href('/campaigns', { status: 'running' })}>{count(data.campaigns.running)}</a>}
+          />
+          <Stat
+            label="scheduled"
+            value={<a href={href('/campaigns', { status: 'scheduled' })}>{count(data.campaigns.scheduled)}</a>}
+          />
+          <Stat label="recipients pending" value={count(data.campaigns.recipientsPending)} />
+          <Stat label="sent in window" value={count(data.campaigns.sentInWindow)} />
+          <Stat label="blocked in window" value={count(data.campaigns.blockedInWindow)} />
+        </div>
+      </Card>
+
       <Card title="why messages were blocked" wide>
         {Object.keys(data.blockedReasons).length === 0 ? (
           <p class="muted">nothing blocked in this window</p>

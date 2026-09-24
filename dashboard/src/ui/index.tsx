@@ -53,7 +53,13 @@ const TONE: Record<string, string> = {
   accepted: 'good',
   completed: 'good',
   active: 'good',
+  done: 'good',
+  running: 'good',
+  sending: 'good',
   queued: 'warning',
+  scheduled: 'warning',
+  expanding: 'warning',
+  paused: 'warning',
   pending: 'warning',
   reserved: 'warning',
   created: 'warning',
@@ -62,6 +68,7 @@ const TONE: Record<string, string> = {
   released: 'serious',
   expired: 'serious',
   cancelled: 'serious',
+  skipped: 'serious',
   failed: 'critical',
 };
 
@@ -224,5 +231,24 @@ export function Text({
       style={`width:${width}px`}
       onInput={(e) => onChange((e.target as HTMLInputElement).value)}
     />
+  );
+}
+
+/**
+ * A filled bar for a count the API returned out of a total it returned. Only
+ * the width is computed here; both numbers are the engine's.
+ */
+export function Progress({ done, total }: { done: number; total: number | null }) {
+  if (!total) return <span class="muted">—</span>;
+  const pct = Math.min(100, Math.round((done / total) * 100));
+  return (
+    <span class="progress" title={`${done} of ${total}`}>
+      <span class="progress-bar">
+        <span class="progress-fill" style={`width:${pct}%`} />
+      </span>
+      <span class="progress-text">
+        {done.toLocaleString()} / {total.toLocaleString()}
+      </span>
+    </span>
   );
 }
