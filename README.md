@@ -71,6 +71,14 @@ never part of `npm test` or CI.
 | `POST /v1/redemptions/:id/settle` | Bearer JWT | the order completed |
 | `POST /v1/redemptions/:id/release` | Bearer JWT | the order went away |
 | `GET /v1/redemptions/:id`, `?orderRef=` | Bearer JWT | one redemption |
+| `POST /v1/contacts`, `GET /v1/contacts`, `GET`/`PATCH /v1/contacts/:id` | Bearer JWT | stored contacts |
+| `POST /v1/contacts/import` | Bearer JWT | CSV of contacts, with consent where a row carries the evidence |
+| `POST`/`GET /v1/audiences`, `GET`/`PATCH`/`DELETE /v1/audiences/:id` | Bearer JWT | static and search audiences |
+| `POST /v1/audiences/:id/members`, `DELETE …/members/:contactId` | Bearer JWT | a static audience's members |
+| `POST /v1/audiences/:id/preview` | Bearer JWT | who would actually get a send, and why not |
+| `POST`/`GET /v1/campaigns`, `GET`/`PATCH /v1/campaigns/:id` | Bearer JWT | campaigns |
+| `POST /v1/campaigns/:id/schedule`, `/pause`, `/resume`, `/cancel` | Bearer JWT | move a campaign through its life |
+| `GET /v1/campaigns/:id/runs`, `…/runs/:runId/recipients` | Bearer JWT | runs, and who got it |
 
 Auth is a Bearer JWT signed HS256 with `JWT_SECRET` and carrying a
 `tenant_id` claim. Anything else is a 401.
@@ -409,6 +417,54 @@ used, so anything but `true` refuses it. A platform `promo_eligibility` row in
 the `rules` table **denies** when it matches, like every other rule kind. Both
 run on every validate, platform first, so a platform rule cannot be lifted by a
 code.
+
+## Campaigns
+
+Contacts, audiences and campaigns live in `src/modules/campaigns/`. A campaign
+is a scheduler and a recipient list: every recipient goes out through
+`messaging.send()`, so consent, rules, channel selection, templates and
+fallback apply exactly as they do to a single send. `docs/API.md` has the
+routes; the short version is:
+
+1. **Contacts** — `POST /v1/contacts`, or `POST /v1/contacts/import` with a CSV.
+   Consent is recorded only for rows that carry the evidence (channels, purpose,
+   source, date). Having someone's number is never consent.
+2. **Audience** — a static list, or a finder search resolved at run time.
+3. **Preview** — `POST /v1/audiences/:id/preview` says who would actually get a
+   send, and why the rest would not. Show it before scheduling.
+4. **Campaign** — `POST /v1/campaigns`, then `/schedule`. One-shot or a
+   five-field cron in the campaign's time zone.
+
+Each run snapshots the audience when it starts, then sends in batches. A
+blocked recipient is terminal and is never retried; a recipient that could not
+be sent at all (no template for the channel picked, say) is `skipped` with the
+reason.
+
+`POST /v1/messages` does not schedule anything: its `evaluateAt` only moves the
+clock the sending window is checked against. To send later, use a campaign.
+
+### The numbers, and where to change them
+
+| Number | Value | Where |
+| --- | --- | --- |
+| Send rate per campaign | `throttlePerMinute`, 1..600, default 60 | per campaign; the bounds are in `src/api/routes/campaigns.ts` and a check constraint in `0013_campaigns.sql` |
+| Batch spacing | every 10 s, each a tenth of the minute's allowance (`ceil(throttle / 6)`) | `BATCH_INTERVAL_SECONDS` in `src/modules/campaigns/campaigns.ts` |
+| Campaigns running at once, per tenant | 5 | `MAX_RUNNING_PER_TENANT`, same file |
+| Wait when a tenant is at that limit | 60 s, then the run tries again | `BACKPRESSURE_SECONDS` in `src/modules/campaigns/worker.ts` |
+| Largest audience a run snapshots | 100,000 contacts | `MAX_AUDIENCE` in `src/modules/campaigns/audiences.ts` |
+| Contacts per import | 20,000 rows | `MAX_CONTACT_IMPORT_ROWS` in `src/modules/campaigns/contacts.ts` |
+
+**The concurrency limit of 5 is a number to revisit.** It is the crude
+backpressure that keeps one tenant from monopolising the queue: scheduling or
+resuming a sixth is a `409 too_many_running`, and a run whose time comes while
+the tenant is at the limit waits a minute and tries again. It says nothing
+about total throughput across tenants, which is bounded only by the send
+worker. Change it once real tenants show what they need.
+
+**The sending window applies at send time.** A marketing SMS batch that reaches
+a Saudi recipient after 21:00 local is blocked by the region rule, and blocked
+is terminal. Schedule marketing campaigns well inside the window, and give a
+large audience enough throttle to finish before it closes.
 
 ## Running it in production
 

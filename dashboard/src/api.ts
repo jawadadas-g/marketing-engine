@@ -80,6 +80,13 @@ export type Overview = {
   webhooks: { pending?: number; failed?: number };
   reservations: { open: number; expiringWithin15m: number };
   discovery: { searches: number; invitesFromSearch: number };
+  campaigns: {
+    scheduled: number;
+    running: number;
+    recipientsPending: number;
+    sentInWindow: number;
+    blockedInWindow: number;
+  };
 };
 
 export type EventRow = {
@@ -234,6 +241,62 @@ export type DeliveryRow = {
   eventType: string;
 };
 
+export type CampaignRun = {
+  id: string;
+  runNo: number;
+  status: string;
+  startedAt: string;
+  finishedAt: string | null;
+  audienceSize: number | null;
+  queued: number;
+  blocked: number;
+  skipped: number;
+  pending: number;
+  error: string | null;
+};
+
+export type CampaignRow = {
+  id: string;
+  tenantId: string;
+  tenantName: string;
+  name: string;
+  status: string;
+  purpose: string;
+  channel: string | null;
+  template: string;
+  audienceId: string;
+  audienceName: string;
+  throttlePerMinute: number;
+  recurrence: { cron: string; endsAt?: string; maxRuns?: number } | null;
+  timezone: string;
+  scheduledAt: string | null;
+  nextRunAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lastRun: CampaignRun | null;
+};
+
+export type CampaignDetail = {
+  campaign: Omit<CampaignRow, 'lastRun'> & { variables: unknown; audienceKind: string };
+  runs: CampaignRun[];
+};
+
+export type RecipientRow = {
+  id: string;
+  name: string | null;
+  phone: string | null;
+  email: string | null;
+  telegram: string | null;
+  state: string;
+  reason: string | null;
+  messageId: string | null;
+  channel: string | null;
+  messageStatus: string | null;
+  messageBlockedReason: string | null;
+  messageError: string | null;
+  messageUpdatedAt: string | null;
+};
+
 export type Metrics = {
   bucket: string;
   series: { key: string; points: [string, number][] }[];
@@ -264,6 +327,11 @@ export const api = {
   schedules: () => get<{ schedules: ScheduleRow[] }>('/schedules'),
 
   metrics: (params: Params) => get<Metrics>('/metrics', params),
+
+  campaigns: (params: Params) => get<Page<CampaignRow>>('/campaigns', params),
+  campaign: (id: string) => get<CampaignDetail>(`/campaigns/${id}`),
+  recipients: (id: string, runId: string, params: Params) =>
+    get<Page<RecipientRow>>(`/campaigns/${id}/runs/${runId}/recipients`, params),
 
   /** The stream is an EventSource, not a fetch; this is just where its URL lives. */
   streamUrl: (params: Params) => `${BASE}/stream${toQuery(params)}`,

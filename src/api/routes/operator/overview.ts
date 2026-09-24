@@ -1,5 +1,6 @@
 import { db } from '../../../db/client.js';
 import { queueState } from '../webhook-endpoints.js';
+import { campaignSection } from './campaigns.js';
 import type { Window } from './shared.js';
 
 /**
@@ -9,7 +10,7 @@ import type { Window } from './shared.js';
 export async function overview(window: Window) {
   const sql = db();
 
-  const [health, queue, messages, blockedReasons, tenants, webhooks, reservations, discovery] =
+  const [health, queue, messages, blockedReasons, tenants, webhooks, reservations, discovery, campaigns] =
     await Promise.all([
       healthSection(),
       queueSection(window),
@@ -37,6 +38,7 @@ export async function overview(window: Window) {
       `),
       reservationSection(),
       discoverySection(window),
+      campaignSection(window),
     ]);
 
   return {
@@ -50,6 +52,7 @@ export async function overview(window: Window) {
     webhooks,
     reservations,
     discovery,
+    campaigns,
   };
 }
 

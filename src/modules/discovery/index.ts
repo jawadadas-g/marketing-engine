@@ -89,6 +89,29 @@ export async function search(
   };
 }
 
+/**
+ * The companies the active finder returns, ids only, logged to finder_runs
+ * like any other search. For callers that want the set rather than a page to
+ * show: a search audience resolving who it currently means.
+ */
+export async function findCompanyIds(
+  tx: Tx,
+  input: { tenantId: string; query: FinderQuery },
+): Promise<string[]> {
+  const finder = activeFinder();
+
+  const startedAt = Date.now();
+  const candidates = await finder.find(tx, input.tenantId, input.query);
+
+  await tx`
+    insert into finder_runs (tenant_id, finder, query, result_count, duration_ms)
+    values (${input.tenantId}, ${finder.name}, ${tx.json(input.query as never)},
+            ${candidates.length}, ${Date.now() - startedAt})
+  `;
+
+  return candidates.map((c) => c.companyId);
+}
+
 async function hydrate(tx: Tx, candidates: Candidate[]): Promise<SearchResult['candidates']> {
   const filled: SearchResult['candidates'] = [];
 

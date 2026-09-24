@@ -11,6 +11,7 @@ import {
   type ChannelConfigRow,
   type MessageRow,
   type TemplateRow,
+  withContact,
 } from './index.js';
 import { unsubscribeUrlFor } from './unsubscribe.js';
 
@@ -100,10 +101,11 @@ export async function processSend(
 }
 
 async function subjectFor(message: MessageRow, template: TemplateRow): Promise<string> {
-  const rendered = await renderFor(message.channel as Channel, template, {
-    ...message.variables,
-    contact: { address: message.address },
-  });
+  const rendered = await renderFor(
+    message.channel as Channel,
+    template,
+    withContact(message.variables, message.address),
+  );
   return rendered.subject ?? '';
 }
 
@@ -149,6 +151,7 @@ async function fallBack(message: MessageRow): Promise<void> {
         variables: message.variables,
         parentMessageId: message.id,
         fallbackChannels: rest,
+        ...(message.campaign_run_id ? { campaignRunId: message.campaign_run_id } : {}),
       });
     } catch (err) {
       // The next channel may not fit this template at all. Record that as a

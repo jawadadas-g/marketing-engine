@@ -50,6 +50,7 @@ export type MessageRow = {
   fallback_channels: string[];
   parent_message_id: string | null;
   company_id: string | null;
+  campaign_run_id: string | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -225,8 +226,10 @@ export async function send(
     parentMessageId?: string | undefined;
     /** Set by the fallback path; otherwise selection works it out. */
     fallbackChannels?: Channel[] | undefined;
+    /** Set when a campaign sent this, so the run can be traced from the message. */
+    campaignRunId?: string | undefined;
   },
-): Promise<MessageRow> {
+): Promise<SendResult> {
   const configs = await listChannelConfigs(tx, input.tenantId);
 
   if (input.channel) {
@@ -274,7 +277,7 @@ export async function send(
       subjectId: row.id,
       payload: { reason: 'no_channel', purpose: input.purpose, channels: selection.reasons },
     });
-    return row;
+    return { ...row, reason: blockedReason(selection.reasons) };
   }
 
   const { channel, address } = selection.chosen;
@@ -298,10 +301,7 @@ export async function send(
   }
 
   const fallback = input.fallbackChannels ?? selection.fallback;
-  const rendered = await renderFor(channel, template, {
-    ...(input.variables ?? {}),
-    contact: { address: contact.address },
-  });
+  const rendered = await renderFor(channel, template, withContact(input.variables, contact.address));
 
   let body = rendered.body;
   if (input.purpose === 'marketing' && channel !== 'email') {
@@ -350,7 +350,110 @@ export async function send(
     retryBackoff: true,
   });
 
-  return row;
+  return { ...row, reason: null };
+}
+
+/**
+ * What send() hands back: the row, plus the one reason worth recording when it
+ * was blocked. The row's own blocked_reason says `no_channel` for nearly every
+ * block; this says why, e.g. `no_consent`.
+ */
+export type SendResult = MessageRow & { reason: string | null };
+
+/**
+ * The reason a blocked send is blocked, from selection's reason per channel.
+ * Channels the contact has no address for, or the tenant no provider for, were
+ * never candidates and say nothing. What is left is one reason when every
+ * candidate agrees, and `channel:reason` pairs when they do not.
+ */
+export function blockedReason(reasons: Record<string, string>): string {
+  const candidates = Object.entries(reasons).filter(
+    ([, reason]) => reason !== 'no_address' && reason !== 'channel_not_configured',
+  );
+  if (candidates.length === 0) return 'no_channel';
+  const distinct = [...new Set(candidates.map(([, reason]) => reason))];
+  if (distinct.length === 1) return distinct[0]!;
+  return candidates.map(([channel, reason]) => `${channel}:${reason}`).join(';');
+}
+
+/**
+ * The variables a template sees. `contact.address` is always the address the
+ * message goes to; anything else the caller put under `contact` stays.
+ */
+export function withContact(
+  variables: Record<string, unknown> | undefined,
+  address: string,
+): Record<string, unknown> {
+  const given = variables?.['contact'];
+  const extra = given && typeof given === 'object' ? (given as Record<string, unknown>) : {};
+  return { ...(variables ?? {}), contact: { ...extra, address } };
+}
+
+/**
+ * Would send() let this intent out, and on which channel? The same selection
+ * send() runs, with nothing written. For previews: "who will actually get this".
+ */
+export async function preflight(
+  tx: Tx,
+  input: {
+    tenantId: string;
+    contact: ContactInput;
+    purpose: Purpose;
+    channel?: Channel | undefined;
+    at?: Date | undefined;
+  },
+): Promise<{ allowed: true; channel: Channel } | { allowed: false; reason: string }> {
+  const configured = new Set((await listChannelConfigs(tx, input.tenantId)).keys());
+
+  if (input.channel) {
+    if (!addressFor(input.contact, input.channel)) return { allowed: false, reason: 'address_missing' };
+    if (!configured.has(input.channel)) return { allowed: false, reason: 'channel_not_configured' };
+  }
+
+  const selection = await selectChannel(tx, {
+    tenantId: input.tenantId,
+    contact: input.contact,
+    purpose: input.purpose,
+    configuredChannels: configured,
+    ...(input.channel ? { preferred: input.channel } : {}),
+    ...(input.at ? { at: input.at } : {}),
+  });
+
+  return selection.chosen
+    ? { allowed: true, channel: selection.chosen.channel }
+    : { allowed: false, reason: blockedReason(selection.reasons) };
+}
+
+/** The channels this tenant has a provider for. */
+export async function configuredChannels(tx: Tx, tenantId: string): Promise<Channel[]> {
+  return [...(await listChannelConfigs(tx, tenantId)).keys()];
+}
+
+/** The channels a template of this name exists for. */
+export async function templateChannels(tx: Tx, tenantId: string, name: string): Promise<Channel[]> {
+  const rows = await tx<{ channel: Channel }[]>`
+    select channel from templates where tenant_id = ${tenantId} and name = ${name}
+  `;
+  return rows.map((r) => r.channel);
+}
+
+export type MessageStatus = {
+  id: string;
+  channel: string;
+  status: MessageRow['status'];
+  blockedReason: string | null;
+  error: string | null;
+  updatedAt: Date;
+};
+
+/** Where each of these messages stands now. For callers that keep message ids. */
+export async function messageStatuses(tx: Tx, ids: string[]): Promise<Map<string, MessageStatus>> {
+  if (ids.length === 0) return new Map();
+  const rows = await tx<MessageStatus[]>`
+    select id, channel, status, blocked_reason as "blockedReason", error, updated_at as "updatedAt"
+    from messages where id = any(${ids}::uuid[])
+  `;
+  return new Map(rows.map((r) => [r.id, r]));
 }
 
 /** A template is unfit when the channel needs a piece the template has not got. */
@@ -408,12 +511,14 @@ async function insertMessage(
     fallbackChannels: Channel[];
     parentMessageId?: string | undefined;
     companyId?: string | undefined;
+    campaignRunId?: string | undefined;
   },
 ): Promise<MessageRow> {
   const [row] = await tx<MessageRow[]>`
     insert into messages
       (tenant_id, channel, address, region, purpose, template_name, body, status,
-       blocked_reason, contact, variables, fallback_channels, parent_message_id, company_id)
+       blocked_reason, contact, variables, fallback_channels, parent_message_id, company_id,
+       campaign_run_id)
     values (${input.tenantId}, ${input.channel}, ${input.address}, ${input.region},
             ${input.purpose}, ${input.template}, ${input.body}, ${input.status},
             ${input.blockedReason ?? null},
@@ -421,7 +526,8 @@ async function insertMessage(
             ${tx.json((input.variables ?? {}) as never)},
             ${input.fallbackChannels},
             ${input.parentMessageId ?? null},
-            ${input.companyId ?? null})
+            ${input.companyId ?? null},
+            ${input.campaignRunId ?? null})
     returning *
   `;
   if (!row) throw new Error('send inserted no message row');

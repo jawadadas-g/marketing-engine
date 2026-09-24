@@ -304,3 +304,29 @@ pre.raw {
 .wrap-any { word-break: break-all; }
 .mono { font-family: var(--mono); }
 .right { margin-left: auto; }
+
+/* A run's progress: the engine's counts over its audience size. */
+.progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.progress-bar {
+  display: inline-block;
+  width: 140px;
+  height: 8px;
+  background: var(--grid);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--series-1);
+}
+.progress-text {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+tr[aria-selected='true'] td { background: var(--raised); }

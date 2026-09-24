@@ -3,6 +3,8 @@
  * from the engine: the dashboard is written against the published contract.
  */
 import type {
+  CampaignDetail,
+  CampaignRow,
   CompanyRow,
   DeliveryRow,
   JobRow,
@@ -10,6 +12,7 @@ import type {
   MessageRow,
   Metrics,
   Overview,
+  RecipientRow,
   RedemptionRow,
   ScheduleRow,
   TenantDetail,
@@ -38,6 +41,7 @@ export const overview: Overview = {
   webhooks: { pending: 1, failed: 2 },
   reservations: { open: 2, expiringWithin15m: 1 },
   discovery: { searches: 33, invitesFromSearch: 4 },
+  campaigns: { scheduled: 2, running: 1, recipientsPending: 340, sentInWindow: 1200, blockedInWindow: 45 },
 };
 
 export const tenants: TenantRow[] = [
@@ -230,3 +234,67 @@ export const metrics: Metrics = {
     },
   ],
 };
+
+const run = {
+  id: '44444444-4444-4444-4444-444444444444',
+  runNo: 3,
+  status: 'sending',
+  startedAt: '2026-09-21T09:00:00.000Z',
+  finishedAt: null,
+  audienceSize: 500,
+  queued: 140,
+  blocked: 18,
+  skipped: 2,
+  pending: 340,
+  error: null,
+};
+
+export const campaigns: CampaignRow[] = [
+  {
+    id: '33333333-3333-3333-3333-333333333333',
+    tenantId: '11111111-1111-1111-1111-111111111111',
+    tenantName: 'Acme Supplies',
+    name: 'Monday diesel offer',
+    status: 'running',
+    purpose: 'marketing',
+    channel: null,
+    template: 'diesel_offer',
+    audienceId: '55555555-5555-5555-5555-555555555555',
+    audienceName: 'diesel buyers, Riyadh',
+    throttlePerMinute: 60,
+    recurrence: { cron: '0 10 * * 1' },
+    timezone: 'Asia/Riyadh',
+    scheduledAt: null,
+    nextRunAt: '2026-09-28T07:00:00.000Z',
+    createdAt: '2026-09-01T08:00:00.000Z',
+    updatedAt: '2026-09-21T09:00:00.000Z',
+    lastRun: run,
+  },
+];
+
+export const campaignDetail: CampaignDetail = {
+  campaign: {
+    ...campaigns[0]!,
+    variables: { offer: '5%' },
+    audienceKind: 'search',
+  },
+  runs: [run, { ...run, id: '66666666-6666-6666-6666-666666666666', runNo: 2, status: 'done', pending: 0, queued: 470, blocked: 28, skipped: 2, finishedAt: '2026-09-14T07:20:00.000Z' }],
+};
+
+export const recipients: RecipientRow[] = [
+  {
+    id: '77777777-7777-7777-7777-777777777777',
+    name: 'Riyadh Diesel Co',
+    phone: '+966501234567',
+    email: null,
+    telegram: null,
+    state: 'blocked',
+    reason: 'no_consent',
+    messageId: '22222222-2222-2222-2222-222222222222',
+    channel: 'sms',
+    messageStatus: 'blocked',
+    messageBlockedReason: 'no_channel',
+    messageError: null,
+    messageUpdatedAt: '2026-09-21T09:00:02.000Z',
+  },
+];

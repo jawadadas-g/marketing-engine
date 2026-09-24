@@ -2,6 +2,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { api } from './api.js';
 import { go, href, section, useRoute } from './router.js';
 import { useAsync } from './ui/index.js';
+import { CampaignDetailView, CampaignsView } from './views/campaigns.js';
 import { CompaniesView } from './views/companies.js';
 import { DeliveriesView } from './views/deliveries.js';
 import { LiveView } from './views/live.js';
@@ -17,6 +18,7 @@ const NAV = [
   ['/queue', 'Queue'],
   ['/tenants', 'Tenants'],
   ['/messages', 'Messages'],
+  ['/campaigns', 'Campaigns'],
   ['/deliveries', 'Deliveries'],
   ['/metrics', 'Metrics'],
   ['/companies', 'Companies'],
@@ -107,6 +109,9 @@ function View({
   if (path.startsWith('/messages/')) {
     return <MessageDetailView id={path.slice('/messages/'.length)} />;
   }
+  if (path.startsWith('/campaigns/')) {
+    return <CampaignDetailView id={path.slice('/campaigns/'.length)} />;
+  }
   if (path.startsWith('/tenants/')) {
     return <TenantDetailView id={path.slice('/tenants/'.length)} />;
   }
@@ -150,6 +155,14 @@ function View({
       };
       return <MessagesView filters={filters} onFilters={(next) => go('/messages', next)} />;
     }
+    case '/campaigns':
+      return (
+        <CampaignsView
+          tenantId={q('tenantId')}
+          status={q('status')}
+          onFilters={(next) => go('/campaigns', next)}
+        />
+      );
     case '/deliveries':
       return (
         <DeliveriesView status={q('status')} onStatus={(s) => go('/deliveries', { status: s })} />

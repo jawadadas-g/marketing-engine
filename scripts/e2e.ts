@@ -16,6 +16,7 @@ import { env, resetEnv } from '../src/env.js';
 import { startJobs, stopJobs } from '../src/jobs/index.js';
 import { deliver, fanOut, verifyPayload } from '../src/modules/webhooks/index.js';
 import { processSend } from '../src/modules/messaging/worker.js';
+import { processBatch, runCampaign, type BatchJob, type RunJob } from '../src/modules/campaigns/index.js';
 
 const REQUIRED_EVENTS = [
   'tenant.created',
@@ -28,11 +29,15 @@ const REQUIRED_EVENTS = [
   'promo.settled',
   'message.queued',
   'message.sent',
+  'contact.upserted',
+  'campaign.scheduled',
+  'campaign.run.started',
+  'campaign.run.finished',
 ];
 
 const PHONE = '+966501234567';
 
-type Delivered = { type: string; verified: boolean };
+type Delivered = { type: string; verified: boolean; payload: unknown };
 const heard: Delivered[] = [];
 
 let step = 0;
@@ -252,8 +257,110 @@ async function journey(listenerUrl: string): Promise<void> {
   await processSend(sent.message.id);
   ok('sent one message and the worker delivered it to the provider');
 
+  await campaignLeg(token);
+
   await drainWebhooks();
   ok(`the marketplace heard ${heard.length} events, all verified`);
+
+  const finished = heard.filter((h) => h.type === 'campaign.run.finished');
+  if (finished.length !== 1) fail('expected one campaign.run.finished on the webhook', finished);
+  const counts = finished[0]!.payload as { audienceSize: number; queued: number; blocked: number };
+  if (counts.audienceSize !== 3 || counts.queued !== 3 || counts.blocked !== 0) {
+    fail('campaign.run.finished counts are wrong', counts);
+  }
+  ok('campaign.run.finished reached the webhook with 3 of 3 queued');
+}
+
+/**
+ * Contacts with consent evidence, an audience, a campaign scheduled a second
+ * out, and the workers driven by hand until the run is done.
+ */
+async function campaignLeg(token: string): Promise<void> {
+  // US numbers carry no regional sending window, so this leg does not depend
+  // on the hour it runs at.
+  const phones = ['+14155550101', '+14155550102', '+14155550103'];
+  const csv = [
+    'phone,email,telegram,name,company_cr,attributes,consent_channels,consent_purpose,consent_source,consent_date',
+    ...phones.map((p, i) => `${p},,,Buyer ${i + 1},,,sms,marketing,signed supply agreement,2026-03-11`),
+  ].join('\n');
+  const imported = (await callRaw('POST', '/v1/contacts/import', csv, {
+    token,
+    contentType: 'text/csv',
+    expect: 200,
+  })) as { contactsCreated: number; consentRecorded: number };
+  if (imported.contactsCreated !== 3 || imported.consentRecorded !== 3) {
+    fail('expected three contacts with consent', imported);
+  }
+  ok('imported three contacts with consent evidence');
+
+  const audience = (await call('POST', '/v1/audiences', {
+    token,
+    body: { name: 'e2e buyers', kind: 'static' },
+    expect: 201,
+  })) as { audience: { id: string } };
+  await callRaw('POST', `/v1/audiences/${audience.audience.id}/members`, ['phone', ...phones].join('\n'), {
+    token,
+    contentType: 'text/csv',
+    expect: 200,
+  });
+  const preview = (await call('POST', `/v1/audiences/${audience.audience.id}/preview`, {
+    token,
+    expect: 200,
+  })) as { total: number; sendable: number };
+  if (preview.total !== 3 || preview.sendable !== 3) fail('preview should show 3 of 3 sendable', preview);
+  ok('built an audience and previewed it: 3 of 3 sendable');
+
+  const created = (await call('POST', '/v1/campaigns', {
+    token,
+    body: {
+      name: 'e2e launch',
+      audienceId: audience.audience.id,
+      template: 'hello',
+      channel: 'sms',
+      purpose: 'marketing',
+      variables: { name: 'there' },
+      scheduledAt: new Date(Date.now() + 1000).toISOString(),
+    },
+    expect: 201,
+  })) as { campaign: { id: string } };
+  const campaignId = created.campaign.id;
+  await call('POST', `/v1/campaigns/${campaignId}/schedule`, { token, expect: 200 });
+  ok('scheduled a campaign one second out');
+
+  await driveCampaignJobs();
+  const campaign = (await call('GET', `/v1/campaigns/${campaignId}`, { token, expect: 200 })) as {
+    campaign: { status: string; lastRun: { id: string; status: string; queued: number } };
+  };
+  if (campaign.campaign.status !== 'done' || campaign.campaign.lastRun.queued !== 3) {
+    fail('the campaign did not finish with 3 queued', campaign);
+  }
+
+  const recipients = (await call(
+    'GET',
+    `/v1/campaigns/${campaignId}/runs/${campaign.campaign.lastRun.id}/recipients`,
+    { token, expect: 200 },
+  )) as { items: { messageId: string | null; state: string }[] };
+  const messageIds = recipients.items.flatMap((r) => (r.messageId ? [r.messageId] : []));
+  if (messageIds.length !== 3) fail('expected three campaign messages', recipients);
+  for (const id of messageIds) await processSend(id);
+  ok('drove the workers: one run, 3 messages sent to the provider');
+}
+
+/** No workers are running, so campaign jobs are taken and run here, ignoring start_after. */
+async function driveCampaignJobs(): Promise<void> {
+  for (let pass = 0; pass < 100; pass += 1) {
+    const [job] = await db()<{ id: string; name: string; data: RunJob & BatchJob }[]>`
+      select id::text, name, data from pgboss.job
+      where name like 'campaign.%' and state = 'created'
+      order by created_on, id
+      limit 1
+    `;
+    if (!job) return;
+    await db()`delete from pgboss.job where id = ${job.id}`;
+    if (job.name === 'campaign.run') await runCampaign(job.data);
+    else await processBatch(job.data);
+  }
+  fail('campaign jobs did not settle');
 }
 
 /** No workers are running, so the queue is drained here, in order. */
@@ -326,7 +433,8 @@ async function startListener(): Promise<{ url: string; close: () => Promise<void
         body,
         signature: headers['webhook-signature'] ?? '',
       });
-      heard.push({ type: (JSON.parse(body) as { type: string }).type, verified });
+      const event = JSON.parse(body) as { type: string; data?: unknown };
+      heard.push({ type: event.type, verified, payload: event.data });
       res.writeHead(200).end();
     });
   });
@@ -344,11 +452,13 @@ async function reset(): Promise<void> {
              tenant_channel_configs, tenant_company, company_sources,
              company_identifiers, company_profiles, invites, finder_runs,
              companies, ledger_entries, redemptions, promocodes,
-             webhook_deliveries, webhook_endpoints restart identity cascade
+             webhook_deliveries, webhook_endpoints, campaign_recipients,
+             campaign_runs, campaigns, audience_members, audiences, contacts
+             restart identity cascade
   `;
   await db()`delete from tenants`;
   await db()`delete from rules where scope = 'tenant'`;
-  await db()`delete from pgboss.job where name like 'webhook.%'`;
+  await db()`delete from pgboss.job where name like 'webhook.%' or name like 'campaign.%'`;
 }
 
 await main();
