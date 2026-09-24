@@ -344,7 +344,9 @@ async function reset(): Promise<void> {
              tenant_channel_configs, tenant_company, company_sources,
              company_identifiers, company_profiles, invites, finder_runs,
              companies, ledger_entries, redemptions, promocodes,
-             webhook_deliveries, webhook_endpoints restart identity cascade
+             webhook_deliveries, webhook_endpoints, campaign_recipients,
+             campaign_runs, campaigns, audience_members, audiences, contacts
+             restart identity cascade
   `;
   await db()`delete from tenants`;
   await db()`delete from rules where scope = 'tenant'`;

@@ -1,5 +1,13 @@
 import type PgBoss from 'pg-boss';
 import { db } from '../db/client.js';
+import {
+  CAMPAIGN_BATCH_JOB,
+  CAMPAIGN_RUN_JOB,
+  processBatch,
+  runCampaign,
+  type BatchJob,
+  type RunJob,
+} from '../modules/campaigns/index.js';
 import { SEND_JOB, SEND_RETRY_LIMIT } from '../modules/messaging/index.js';
 import { processSend } from '../modules/messaging/worker.js';
 import { EXPIRE_JOB, expireReservations } from '../modules/promocodes/index.js';
@@ -25,6 +33,12 @@ export async function startJobs(opts: { registerWorkers?: boolean } = {}): Promi
   for (const name of [NOOP, IDEMPOTENCY_CLEANUP, SEND_JOB, EXPIRE_JOB, FANOUT_JOB, DELIVER_JOB]) {
     await b.createQueue(name);
   }
+  // `short`: while one job with a singleton key is waiting, another with the
+  // same key is dropped. A double schedule, or a resume racing the batch it
+  // resumes, therefore queues one job, not two.
+  for (const name of [CAMPAIGN_RUN_JOB, CAMPAIGN_BATCH_JOB]) {
+    await b.createQueue(name, { name, policy: 'short' });
+  }
 
   // Schedules are part of what the queue is, not of whether this process
   // consumes it: a second replica that registers no workers should still see
@@ -44,6 +58,18 @@ export async function startJobs(opts: { registerWorkers?: boolean } = {}): Promi
         // count has reached the limit.
         processSend(messageId, { finalAttempt: job.retryCount >= SEND_RETRY_LIMIT }),
       );
+    }
+  });
+
+  await b.work(CAMPAIGN_RUN_JOB, async (jobs) => {
+    for (const job of jobs) {
+      await withJobLog(CAMPAIGN_RUN_JOB, job.id, () => runCampaign(job.data as RunJob));
+    }
+  });
+
+  await b.work(CAMPAIGN_BATCH_JOB, async (jobs) => {
+    for (const job of jobs) {
+      await withJobLog(CAMPAIGN_BATCH_JOB, job.id, () => processBatch(job.data as BatchJob));
     }
   });
 
